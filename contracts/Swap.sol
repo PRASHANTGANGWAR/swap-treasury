@@ -1,61 +1,95 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
-
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./utils/ECDSA.sol";
 
-contract NetzUsdtSwap {
+contract Swap {
     address public owner;
     address feesWallet;
     uint numerator = 1;
     uint denominator = 10;
-    IERC20 public tokenContractNTZ; 
-    IERC20 public usdtContract;
-    
+    uint swapRatio;
+    address networkFeeWallet;
+    bool public swapWithSignatureEnabled = false;
+    bool public delegateSwapWithSignatureEnabled = false;
+    ContractStruct public contractData;
+    enum ConversionType {
+        token1,
+        token2
+    }
+
     struct SwapStruct {
         address _address;
-        string from;
-        string to;
-        uint amount;
-        uint conversion_factor;
-        uint paid_amount;
+        string _from;
+        string _to;
+        uint _amount;
+        uint _conversionFactor;
+        uint _paidAmount;
     }
 
     struct WithdrawStruct {
-        address to;
-        uint amount;
-        string token_type;
-        uint block_timestamp;
+        address _to;
+        uint _amount;
+        string _tokenType;
+        uint _blockTimestamp;
+    }
+
+    struct ContractStruct {
+        IERC20 _token1Contract;
+        uint _token1Decimals;
+        IERC20 _token2Contract;
+        uint _token2Decimals;
     }
 
     SwapStruct[] public swapStructArray;
     WithdrawStruct[] public withdrawStructArray;
 
     // mappings
-    mapping(address => SwapStruct) public swapStructMapping;
-    mapping(address => WithdrawStruct) public WithdrawStructMapping;
-    mapping(address => bool) public signManagers; 
-    mapping(address => bool) public subAdmin; 
-
-  
+    mapping(address => SwapStruct[]) public swapStructMapping;
+    mapping(address => WithdrawStruct[]) public WithdrawStructMapping;
+    mapping(address => bool) public signManagers;
+    mapping(address => bool) public subAdmin;
 
     // events
-    event WithdrawTransaction(address _to, string _type, uint amount);
-    event SwapTransaction(address _from, string _type, uint ratio, uint _sentAmount, uint receiveAmount);
+    event WithdrawTransaction(
+        address _to,
+        ConversionType _conversionType,
+        uint amount
+    );
+    event SwapTransaction(
+        address _from,
+        ConversionType _conversionType,
+        uint _ratio,
+        uint _sentAmount,
+        uint receiveAmount
+    );
     event NumeratorFessUpdate(uint value);
     event DenominatorFessUpdate(uint value);
-    event FeesWalletUpdate(address);
-    event SignerAdded(address);
-    event SignerRemove(address);
+    event UpdateSigner(address, bool);
+    event UpdateSubAdmin(address, bool);
+    event UpdateRatio(uint);
+    event SwapEnabled(bool);
+    event DelegateSwapEnabled(bool);
 
-
-    constructor(address _netzAddress, address _usdtAddress, address _feesWallet) {
+    constructor(
+        address _token1Address,
+        uint _token1Decimal,
+        address _token2Address,
+        uint _token2Decimal,
+        uint _ratio,
+        address _networkFeeWallet
+    ) {
         owner = msg.sender;
-        tokenContractNTZ = IERC20(_netzAddress); 
-        usdtContract = IERC20(_usdtAddress); 
+        contractData = ContractStruct(
+            IERC20(_token1Address),
+            _token1Decimal,
+            IERC20(_token2Address),
+            _token2Decimal
+        );
         signManagers[msg.sender] = true;
-        feesWallet = _feesWallet;
+        swapRatio = _ratio;
+        networkFeeWallet = _networkFeeWallet;
     }
 
     modifier onlyOwner() {
@@ -63,161 +97,574 @@ contract NetzUsdtSwap {
         _;
     }
 
-    modifier onlySubAdminOrOwner() {
-        require(subAdmin[msg.sender] || msg.sender == owner , "Only the sub admin can call this function");
+    modifier swapIsEnabled() {
+        require(swapWithSignatureEnabled, "Swapping is currently disabled");
         _;
     }
-    
-    // Transfer tokens to another account
-    function withdrawToAnother(address _to, string memory _type, uint _amount) public onlyOwner {
+    modifier onlySubAdminOrOwner() {
+        require(
+            subAdmin[msg.sender] || msg.sender == owner,
+            "Only owner and sub admin can call this function"
+        );
+        _;
+    }
+
+    modifier delegateSwapModifier() {
+        require(
+            delegateSwapWithSignatureEnabled,
+            "Delegate swap with signature is currently disabled"
+        );
+        _;
+    }
+
+    /**
+     * @dev Allows the owner to withdraw a specified amount of tokens to another address.
+     * @param _to The address to withdraw the tokens to.
+     * @param _type The type of withdrawal.
+     * @param _amount The amount of tokens to withdraw.
+     */
+
+    function withdrawToAnother(
+        address _to,
+        ConversionType _conversionType,
+        uint _amount
+    ) public onlyOwner {
         require(_to != address(0), "Invalid address");
-        withdraw(_to, _type, _amount);
+        _withdraw(_to, _conversionType, _amount);
     }
 
-    // Transfer tokens to owner
-    function withdrawToAdmin(string memory _type, uint _amount) public onlyOwner {
-        withdraw(owner, _type, _amount);
-    }
-
-    // token swap
-    function swap(bytes memory signature, uint256 ratio, uint256 amount, string memory conversionType) public {
-        bytes32 message = swapProof(ratio, amount, conversionType, msg.sender);
-        address signerAddress = getSigner(message, signature);
-        require(signerAddress != address(0) , "Invalid signer address");
+    /**
+     *
+     * @dev Function to perform a swap with signature operation.
+     * @param _signature The signature used to verify the swap.
+     * @param _ratio The conversion ratio for the swap.
+     * @param _amount The amount of tokens to be swapped.
+     * @param _conversionType The type of conversion for the swap.
+     */
+    function swap(
+        bytes memory _signature,
+        uint256 _ratio,
+        uint256 _amount,
+        ConversionType _conversionType
+    ) public swapIsEnabled {
+        bytes32 message = swapProof(
+            _ratio,
+            _amount,
+            _conversionType,
+            msg.sender
+        );
+        address signerAddress = getSigner(message, _signature);
+        require(signerAddress != address(0), "Invalid signer address");
+        require(_amount > 0, "Invalid amount");
         require(isSigner(signerAddress), "Invalid signer address");
-        require(amount > 0, "Invalid amount");
-        uint fees = feesCalculate(amount);
-        uint remainingTokenAmount = amount - fees;
+        uint fees = feesCalculate(_amount);
+        uint remainingTokenAmount = _amount - fees;
+        _swap(_ratio, _conversionType, remainingTokenAmount, _amount, fees);
+    }
 
-        if (keccak256(abi.encodePacked(conversionType)) == keccak256(abi.encodePacked("token"))) {
-            require(usdtContract.balanceOf(msg.sender) >= amount, "Insufficient balance");
-           
-            uint tokenAmount = remainingTokenAmount / ratio;
-            require(tokenContractNTZ.balanceOf(address(this)) >= tokenAmount, "Insufficient balance for swap");
+    /**
+     * @dev Function to perform a swap without signature operation.
+     * @param _amount The amount of tokens to be swapped.
+     * @param _conversionType The type of conversion for the swap.
+     */
+    function swapDirect(
+        uint256 _amount,
+        ConversionType _conversionType
+    ) public {
+        require(_amount > 0, "Invalid amount");
+        uint fees = feesCalculate(_amount);
+        uint remainingTokenAmount = _amount - fees;
+        _swap(swapRatio, _conversionType, remainingTokenAmount, _amount, fees);
+    }
 
-            SwapStruct memory swapValues = SwapStruct(msg.sender, "usdt", "token", amount, ratio, tokenAmount);
-            swapStructArray.push(swapValues);
-            swapStructMapping[msg.sender] = swapValues;
-
-            SafeERC20.safeTransferFrom(usdtContract, msg.sender, address(this), amount);
-            SafeERC20.safeTransfer(tokenContractNTZ, msg.sender, tokenAmount);
-            SafeERC20.safeTransfer(usdtContract,feesWallet, fees);
-            emit SwapTransaction(msg.sender, conversionType, ratio,tokenAmount, amount);
-        } 
-        else if (keccak256(abi.encodePacked(conversionType)) == keccak256(abi.encodePacked("usdt"))) {
-            require(tokenContractNTZ.balanceOf(msg.sender) >= amount, "Insufficient balance");
-            uint256 usdtAmount = remainingTokenAmount * ratio;
-            require(usdtContract.balanceOf(address(this)) >= usdtAmount , "Insufficient balance for swap");
-
-            SwapStruct memory swapValues = SwapStruct(msg.sender, "token", "usdt", amount, ratio, usdtAmount);
-            swapStructArray.push(swapValues);
-            swapStructMapping[msg.sender] = swapValues;
-
-            SafeERC20.safeTransferFrom(tokenContractNTZ, msg.sender, address(this), amount);
-            SafeERC20.safeTransfer(usdtContract, msg.sender, usdtAmount);
-            SafeERC20.safeTransfer(tokenContractNTZ, feesWallet, fees);
-            emit SwapTransaction(msg.sender, conversionType, ratio, usdtAmount, amount);
-
+    /**
+     * @dev Function to delegate a swap operation with a signature.
+     * @param signature The signature used to verify the swap.
+     * @param amount The amount of tokens to be swapped.
+     * @param conversionType The type of conversion for the swap.
+     * @param networkFee The network fee associated with the swap.
+     */
+    function delegateSwapWithSignature(
+        bytes memory _signature,
+        uint _amount,
+        ConversionType _conversionType,
+        uint _networkFee
+    ) public delegateSwapModifier {
+        bytes32 message = delgateSwapProof(
+            _amount,
+            _conversionType,
+            msg.sender,
+            _networkFee
+        );
+        address signerAddress = getSigner(message, _signature);
+        require(
+            signerAddress != address(0) || isSigner(signerAddress),
+            "Invalid signer address"
+        );
+        uint remToken = _amount - _networkFee;
+        uint fees = feesCalculate(remToken);
+        uint remainingTokenAmount = remToken - fees;
+        _swap(swapRatio, _conversionType, remainingTokenAmount, _amount, fees);
+        if (_conversionType == ConversionType.token1) {
+            SafeERC20.safeTransfer(
+                contractData._token2Contract,
+                networkFeeWallet,
+                _networkFee
+            );
         }
-
-    }
-
-    function withdraw(address _to, string memory _type, uint _amount) internal {
-        if (keccak256(abi.encodePacked(_type)) == keccak256(abi.encodePacked("token"))) {
-            require(tokenContractNTZ.balanceOf(address(this))> _amount, "Insufficient token balance");
-            WithdrawStruct memory withdrawValues = WithdrawStruct(_to, _amount, "token", block.timestamp);
-            withdrawStructArray.push(withdrawValues);
-            WithdrawStructMapping[msg.sender] = withdrawValues;
-            SafeERC20.safeTransfer(tokenContractNTZ, _to, _amount);
+        if (_conversionType == ConversionType.token2) {
+            SafeERC20.safeTransfer(
+                contractData._token1Contract,
+                networkFeeWallet,
+                _networkFee
+            );
         }
-        if (keccak256(abi.encodePacked(_type)) == keccak256(abi.encodePacked("usdt"))) {
-            require(usdtContract.balanceOf(address(this))> _amount, "Insufficient USDT balance");
-            WithdrawStruct memory withdrawValues = WithdrawStruct(_to, _amount, "usdt", block.timestamp);
-            withdrawStructArray.push(withdrawValues);
-            WithdrawStructMapping[msg.sender] = withdrawValues;
-            SafeERC20.safeTransfer(usdtContract, _to, _amount);
+    }
+
+    /**
+     * @dev Function to delegate a swap operation without a signature.
+     * @param amount The amount of tokens to be swapped.
+     * @param conversionType The type of conversion for the swap.
+     * @param networkFee The network fee associated with the swap.
+     */
+    function delegateswap(
+        uint256 _amount,
+        ConversionType _conversionType,
+        uint _networkFee
+    ) public {
+        require(_amount > 0, "Invalid amount");
+        uint remToken = _amount - _networkFee;//4877
+        uint fees = feesCalculate(remToken);
+        uint remainingTokenAmount = remToken - fees;
+        _swap(swapRatio, _conversionType, remainingTokenAmount, _amount, fees);
+        if (_conversionType == ConversionType.token1) {
+            SafeERC20.safeTransfer(
+               contractData._token2Contract,
+                networkFeeWallet,
+                _networkFee
+            );
         }
-        emit WithdrawTransaction (_to, _type, _amount);
+        if (_conversionType == ConversionType.token2) {
+            SafeERC20.safeTransfer(
+                contractData._token1Contract,
+                networkFeeWallet,
+                _networkFee
+            );
+        }
     }
 
-    function currentContractTokenBalance() public view returns (uint) {
-       return tokenContractNTZ.balanceOf(address(this));
+    /**
+     * @dev Internal function to perform the swap operation.
+     * @param _swapRatio The conversion ratio for the swap.
+     * @param _conversionType The type of conversion for the swap.
+     * @param _remainingTokenAmount The remaining amount of tokens after deducting fees and network fees.
+     * @param _amount The total amount of tokens to be swapped.
+     * @param _fees The fees associated with the swap
+     */
+    function _swap(
+        uint _swapRatio,
+        ConversionType _conversionType,
+        uint _remainingTokenAmount,
+        uint _amount,
+        uint _fees
+    ) internal {
+        if (_conversionType == ConversionType.token1) {
+            require(
+                contractData._token2Contract.allowance(
+                    msg.sender,
+                    address(this)
+                ) >= _amount,
+                "Insufficient allowance for this transection.Please approve a higher allowance."
+            );
+            require(
+                contractData._token2Contract.balanceOf(msg.sender) >= _amount,
+                "Insufficient balance"
+            );
+            uint256 token2BaseUnits = _remainingTokenAmount *
+                (10 ** contractData._token2Decimals);
+
+            uint token1Amount = ((token2BaseUnits * 100) / swapRatio) /
+                (10 ** contractData._token2Decimals);
+            require(
+                contractData._token1Contract.balanceOf(address(this)) >=
+                    token1Amount,
+                "Insufficient balance for swap"
+            );
+
+            SwapStruct memory swapValues = SwapStruct(
+                msg.sender,
+                "token2",
+                "token1",
+                _amount,
+                _swapRatio,
+                token1Amount
+            );
+            swapStructMapping[msg.sender].push(swapValues);
+
+            SafeERC20.safeTransferFrom(
+                contractData._token2Contract,
+                msg.sender,
+                address(this),
+                _amount
+            );
+            SafeERC20.safeTransfer(
+                contractData._token1Contract,
+                msg.sender,
+                token1Amount
+            );
+            SafeERC20.safeTransfer(
+                contractData._token2Contract,
+                address(this),
+                _fees
+            );
+            emit SwapTransaction(
+                msg.sender,
+                _conversionType,
+                swapRatio,
+                token1Amount,
+                _amount
+            );
+        }
+        if (_conversionType == ConversionType.token2) {
+            require(
+                contractData._token1Contract.allowance(
+                    msg.sender,
+                    address(this)
+                ) >= _amount,
+                "Insufficient allowance for this transection.Please approve a higher allowance."
+            );
+            require(
+                contractData._token1Contract.balanceOf(msg.sender) >= _amount,
+                "Insufficient balance"
+            );
+            uint256 token1BaseUnits = _remainingTokenAmount *
+                (10 ** contractData._token1Decimals);
+
+            uint token2Amount = ((token1BaseUnits * swapRatio) / 100) /
+                (10 ** contractData._token1Decimals);
+
+            require(
+                contractData._token2Contract.balanceOf(address(this)) >=
+                    token2Amount,
+                "Insufficient balance for swap"
+            );
+
+            SwapStruct memory swapValues = SwapStruct(
+                msg.sender,
+                "token1",
+                "token2",
+                _amount,
+                _swapRatio,
+                token2Amount
+            );
+            swapStructMapping[msg.sender].push(swapValues);
+
+            SafeERC20.safeTransferFrom(
+                contractData._token1Contract,
+                msg.sender,
+                address(this),
+                _amount
+            );
+            SafeERC20.safeTransfer(
+                contractData._token2Contract,
+                msg.sender,
+                token2Amount
+            );
+            SafeERC20.safeTransfer(
+                contractData._token1Contract,
+                address(this),
+                _fees
+            );
+            emit SwapTransaction(
+                msg.sender,
+                _conversionType,
+                _swapRatio,
+                token2Amount,
+                _amount
+            );
+        }
     }
 
-    function currentContractUSDTBalance() public view returns (uint) {
-       return usdtContract.balanceOf(address(this));
-    }
-   
-    function getSwapStructArray() public view returns (SwapStruct[] memory) {
-        return swapStructArray;
+    /**
+     * @dev Internal function to withdraw tokens to a specified address.
+     * @param _to The address to which tokens will be withdrawn.
+     * @param _conversionType The type of conversion for the withdrawal.
+     * @param _amount The amount of tokens to be withdrawn.
+     */
+    function _withdraw(
+        address _to,
+        ConversionType _conversionType,
+        uint _amount
+    ) internal {
+        if (_conversionType == ConversionType.token1) {
+            require(
+                contractData._token1Contract.balanceOf(address(this)) > _amount,
+                "Insufficient token1 balance"
+            );
+            WithdrawStruct memory withdrawValues = WithdrawStruct(
+                _to,
+                _amount,
+                "token1",
+                block.timestamp
+            );
+
+            WithdrawStructMapping[msg.sender].push(withdrawValues);
+            SafeERC20.safeTransfer(contractData._token1Contract, _to, _amount);
+        }
+        if (_conversionType == ConversionType.token2) {
+            require(
+                contractData._token2Contract.balanceOf(address(this)) > _amount,
+                "Insufficient token2 balance"
+            );
+            WithdrawStruct memory withdrawValues = WithdrawStruct(
+                _to,
+                _amount,
+                "token2",
+                block.timestamp
+            );
+            WithdrawStructMapping[msg.sender].push(withdrawValues);
+            SafeERC20.safeTransfer(contractData._token2Contract, _to, _amount);
+        }
+        emit WithdrawTransaction(_to, _conversionType, _amount);
     }
 
-    function getWithdrawStructArray() public view returns (WithdrawStruct[] memory) {
+    /**
+     * @dev External function to retrieve the current balance of token1 held by the contract.
+     * @return The current balance of token1.
+     */
+    function token1Balance() external view returns (uint) {
+        return contractData._token1Contract.balanceOf(address(this));
+    }
+
+    /**
+     * @dev External function to retrieve the current balance of token2 held by the contract.
+     * @return The current balance of token2.
+     */
+    function token2Balance() external view returns (uint) {
+        return contractData._token2Contract.balanceOf(address(this));
+    }
+
+    /**
+     * @dev External function to retrieve an array of swap transaction structs.
+     * @return An array of swap transaction structs.
+     */
+    function getSwapStructArray() external view returns (SwapStruct[] memory) {
+        return swapStructMapping[msg.sender];
+    }
+
+    /**
+     * @dev External function to retrieve an array of withdrawal transaction structs.
+     * @return An array of withdrawal transaction structs.
+     */
+    function getWithdrawStructArray()
+        external
+        view
+        returns (WithdrawStruct[] memory)
+    {
         return withdrawStructArray;
     }
 
     /**
-     * @dev Get the message hash for signing for mint NTZC
+     * @dev Function to generate a proof for a swap operation.
+     * @param ratio The conversion ratio for the swap.
+     * @param amount The amount of tokens to be swapped.
+     * @param conversionType The type of conversion for the swap.
+     * @param receiver The receiver address for the swap.
+     * @return The generated message hash for the swap proof.
      */
-    function swapProof(uint256 ratio, uint amount, string memory conversionType, address receiver) public pure returns (bytes32 message) {
-        message = keccak256(abi.encode(ratio, amount, conversionType, receiver));
+    function swapProof(
+        uint256 _ratio,
+        uint _amount,
+        ConversionType _conversionType,
+        address _receiver
+    ) public pure returns (bytes32 message) {
+        message = keccak256(
+            abi.encode(_ratio, _amount, _conversionType, _receiver)
+        );
     }
 
-    function getSigner(bytes32 message, bytes memory signature) public pure returns (address) {
-        message = ECDSA.toEthSignedMessageHash(message);
-        return ECDSA.recover(message, signature);
+    /**
+     * @dev Generates a proof message for delegating a swap.
+     * @param _amount The amount of tokens to be swapped.
+     * @param _conversionType The type of conversion being performed.
+     * @param _receiver The address of the recipient who will receive the swapped tokens.
+     * @param _networkFee The amount of network fee associated with the swap.
+     * @return message The generated proof message, a hash of the provided parameters.
+     */
+    function delgateSwapProof(
+        uint _amount,
+        ConversionType _conversionType,
+        address _receiver,
+        uint _networkFee
+    ) public pure returns (bytes32 message) {
+        message = keccak256(
+            abi.encode(_amount, _conversionType, _receiver, _networkFee)
+        );
     }
 
+    /**
+     * @dev Function to retrieve the signer address from a message hash and signature.
+     * @param _message The message hash for the swap.
+     * @param _signature The signature used to verify the swap.
+     * @return The address of the signer.
+     */
+    function getSigner(
+        bytes32 _message,
+        bytes memory signature
+    ) public pure returns (address) {
+        _message = ECDSA.toEthSignedMessageHash(_message);
+        return ECDSA.recover(_message, signature);
+    }
+
+    /**
+     * @dev Function to check if an address is authorized as a signer.
+     * @param _signer The address to check.
+     * @return True if the address is authorized as a signer, false otherwise.
+     */
     function isSigner(address _signer) public view returns (bool) {
         return signManagers[_signer];
     }
 
-    function addSigner(address _address) public onlySubAdminOrOwner {
-        signManagers[_address] = true;
-        emit  SignerAdded(_address);
+    /**
+     * @dev Function to update the authorization status of a signer address.
+     * @param _address The address of the signer to update.
+     * @param _value The new authorization status.
+     * Requirements:
+     * - Only the owner or sub-admin can call this function.
+     */
+    function updateSigner(
+        address _address,
+        bool _value
+    ) external onlySubAdminOrOwner {
+        require(signManagers[_address] != _value, "Already exixst");
+        signManagers[_address] = _value;
+        emit UpdateSigner(_address, _value);
     }
 
-    function removeSigner(address _address) public onlySubAdminOrOwner {
-        signManagers[_address] = false;
-        emit SignerRemove(_address);
-    }
-
-    function updateNumerator(uint _value) public  onlySubAdminOrOwner {
+    /**
+     * @dev Function to update the numerator value for fee calculation.
+     * @param _value The new numerator value.
+     * Requirements:
+     * - Only the owner or sub-admin can call this function.
+     */
+    function updateNumerator(uint _value) external onlySubAdminOrOwner {
         numerator = _value;
         emit NumeratorFessUpdate(_value);
     }
 
-    function updateDenominator(uint _value) public  onlySubAdminOrOwner {
+    /**
+     * @dev Function to update the denominator value for fee calculation.
+     * @param _value The new denominator value.
+     * Requirements:
+     * - Only the owner or sub-admin can call this function.
+     */
+    function updateDenominator(uint _value) external onlySubAdminOrOwner {
         denominator = _value;
         emit DenominatorFessUpdate(_value);
     }
 
-    function getNumerator() public view  returns(uint) {
-        return  numerator;
+    /**
+     * @dev External function to retrieve the current numerator value used for fee calculation.
+     * @return The current numerator value.
+     */
+    function getNumerator() external view returns (uint) {
+        return numerator;
     }
 
-    function getDenominator() public view  returns(uint) {
-       return  denominator;
+    /**
+     * @dev External function to retrieve the denominator value used for fee calculation.
+     * @return The current denominator value.
+     */
+    function getDenominator() external view returns (uint) {
+        return denominator;
     }
 
-    function feesCalculate(uint _amount) public view  returns (uint)   {
-        return ((_amount * numerator/denominator)*1/100);
+    /**
+     * @dev Function to calculate fees based on the provided amount.
+     * @param _amount The amount for which fees are to be calculated.
+     * @return The calculated fees.
+     */
+    function feesCalculate(uint _amount) public view returns (uint) {
+        return ((((_amount * numerator) / denominator) * 1) / 100);
     }
 
-    function updateFessWallet(address _address) public onlySubAdminOrOwner {
-        feesWallet = _address;
-        emit FeesWalletUpdate(_address);
+    /**
+     * @dev Function to update the sub-admin authorization status.
+     * @param _address The address of the sub-admin to update.
+     * @param _value The new authorization status.
+     * Requirements:
+     * - Only the contract owner can call this function.
+     */
+
+    function updateSubAdmin(address _address, bool _value) external onlyOwner {
+        require(subAdmin[_address] != _value, "Already exists");
+        subAdmin[_address] = _value;
+        emit UpdateSubAdmin(_address, _value);
     }
 
-    function getFessWallet() public  view returns(address)  {
-        return  feesWallet;
+    /**
+     * @dev Function to update the swap ratio.
+     * @param _value The new swap ratio value.
+     * Requirements:
+     * - Only the contract owner or sub-admin can call this function.
+     */
+
+    function updateRatio(uint _value) external onlySubAdminOrOwner {
+        swapRatio = _value;
+        emit UpdateRatio(_value);
     }
 
-    function addSubAdmin(address _address) public onlyOwner {
-        subAdmin[_address] =  true;
+    /**
+     * @dev External function to retrieve the current swap ratio.
+     * @return The current swap ratio value.
+     */
+
+    function getRatio() external view returns (uint) {
+        return swapRatio;
     }
-    function removeSubAdmin(address _address) public onlyOwner {
-        subAdmin[_address] =  false;
+
+    /**
+     * @dev Function to update the swap toggle to enable or disable swapping.
+     * @param _value The new value to set for swapEnabled.
+     * Requirements:
+     * - No specific requirements.
+     */
+    function updateSwapToggle(bool _value) external {
+        require(swapWithSignatureEnabled != _value, "Already exists");
+        swapWithSignatureEnabled = _value;
+        emit SwapEnabled(_value);
+    }
+
+    /**
+     * @dev Function to update the delegate swap toggle to enable or disable swapping.
+     * @param _value The new value to set for swapEnabled.
+     * Requirements:
+     * - No specific requirements.
+     */
+    function updateDelegateSwapToggle(bool _value) external {
+        require(delegateSwapWithSignatureEnabled != _value, "Already exist");
+        delegateSwapWithSignatureEnabled = _value;
+        emit DelegateSwapEnabled(_value);
+    }
+
+    /**
+     * @dev Updates the contract data for the first  token instance.
+     * @param _address The address of the  token contract to be assigned to `_token1Contract`.
+     * @param _value The decimal value of the  token to be assigned to `_token1Decimals`.
+     */
+    function updateToken1Instance(address _address, uint _value) external {
+        contractData._token1Contract = IERC20(_address);
+        contractData._token1Decimals = _value;
+    }
+
+    /**
+     * @dev Updates the contract data for the second  token instance.
+     * @param _address The address of the  token contract to be assigned to `_token2Contract`.
+     * @param _value The decimal value of the  token to be assigned to `_token2Decimals`.
+     */
+    function updateToken2Instance(address _address, uint _value) external {
+        contractData._token2Contract = IERC20(_address);
+        contractData._token2Decimals = _value;
     }
 
 }
