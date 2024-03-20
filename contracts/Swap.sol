@@ -159,7 +159,7 @@ contract Swap {
         require(isSigner(signerAddress), "Invalid signer address");
         uint fees = feesCalculate(_amount);
         uint remainingTokenAmount = _amount - fees;
-        _swap(_ratio, _conversionType, remainingTokenAmount, _amount, fees);
+        _swap(msg.sender,_ratio, _conversionType, remainingTokenAmount, _amount, fees);
     }
 
     /**
@@ -174,7 +174,7 @@ contract Swap {
         require(_amount > 0, "Invalid amount");
         uint fees = feesCalculate(_amount);
         uint remainingTokenAmount = _amount - fees;
-        _swap(swapRatio, _conversionType, remainingTokenAmount, _amount, fees);
+        _swap(msg.sender,swapRatio, _conversionType, remainingTokenAmount, _amount, fees);
     }
 
     /**
@@ -188,12 +188,13 @@ contract Swap {
         bytes memory _signature,
         uint _amount,
         ConversionType _conversionType,
-        uint _networkFee
+        uint _networkFee,
+        address _walletAddress
     ) public delegateSwapModifier {
         bytes32 message = delgateSwapProof(
             _amount,
             _conversionType,
-            msg.sender,
+            _walletAddress,
             _networkFee
         );
         address signerAddress = getSigner(message, _signature);
@@ -204,7 +205,7 @@ contract Swap {
         uint remToken = _amount - _networkFee;
         uint fees = feesCalculate(remToken);
         uint remainingTokenAmount = remToken - fees;
-        _swap(swapRatio, _conversionType, remainingTokenAmount, _amount, fees);
+        _swap(_walletAddress, swapRatio, _conversionType, remainingTokenAmount, _amount, fees);
         if (_conversionType == ConversionType.token1) {
             SafeERC20.safeTransfer(
                 contractData._token2Contract,
@@ -228,6 +229,7 @@ contract Swap {
      * @param networkFee The network fee associated with the swap.
      */
     function delegateswap(
+        address _walletAddress, 
         uint256 _amount,
         ConversionType _conversionType,
         uint _networkFee
@@ -236,7 +238,7 @@ contract Swap {
         uint remToken = _amount - _networkFee;//4877
         uint fees = feesCalculate(remToken);
         uint remainingTokenAmount = remToken - fees;
-        _swap(swapRatio, _conversionType, remainingTokenAmount, _amount, fees);
+        _swap(_walletAddress, swapRatio, _conversionType, remainingTokenAmount, _amount, fees);
         if (_conversionType == ConversionType.token1) {
             SafeERC20.safeTransfer(
                contractData._token2Contract,
@@ -261,7 +263,8 @@ contract Swap {
      * @param _amount The total amount of tokens to be swapped.
      * @param _fees The fees associated with the swap
      */
-    function _swap(
+     function _swap(
+        address _walletAddress,
         uint _swapRatio,
         ConversionType _conversionType,
         uint _remainingTokenAmount,
@@ -271,13 +274,13 @@ contract Swap {
         if (_conversionType == ConversionType.token1) {
             require(
                 contractData._token2Contract.allowance(
-                    msg.sender,
+                    _walletAddress,
                     address(this)
                 ) >= _amount,
                 "Insufficient allowance for this transection.Please approve a higher allowance."
             );
             require(
-                contractData._token2Contract.balanceOf(msg.sender) >= _amount,
+                contractData._token2Contract.balanceOf(_walletAddress) >= _amount,
                 "Insufficient balance"
             );
             uint256 token2BaseUnits = _remainingTokenAmount *
@@ -292,24 +295,24 @@ contract Swap {
             );
 
             SwapStruct memory swapValues = SwapStruct(
-                msg.sender,
+                _walletAddress,
                 "token2",
                 "token1",
                 _amount,
                 _swapRatio,
                 token1Amount
             );
-            swapStructMapping[msg.sender].push(swapValues);
+            swapStructMapping[_walletAddress].push(swapValues);
 
             SafeERC20.safeTransferFrom(
                 contractData._token2Contract,
-                msg.sender,
+                _walletAddress,
                 address(this),
                 _amount
             );
             SafeERC20.safeTransfer(
                 contractData._token1Contract,
-                msg.sender,
+                _walletAddress,
                 token1Amount
             );
             SafeERC20.safeTransfer(
@@ -318,7 +321,7 @@ contract Swap {
                 _fees
             );
             emit SwapTransaction(
-                msg.sender,
+                _walletAddress,
                 _conversionType,
                 swapRatio,
                 token1Amount,
@@ -328,13 +331,13 @@ contract Swap {
         if (_conversionType == ConversionType.token2) {
             require(
                 contractData._token1Contract.allowance(
-                    msg.sender,
+                   _walletAddress,
                     address(this)
                 ) >= _amount,
                 "Insufficient allowance for this transection.Please approve a higher allowance."
             );
             require(
-                contractData._token1Contract.balanceOf(msg.sender) >= _amount,
+                contractData._token1Contract.balanceOf(_walletAddress) >= _amount,
                 "Insufficient balance"
             );
             uint256 token1BaseUnits = _remainingTokenAmount *
@@ -350,24 +353,24 @@ contract Swap {
             );
 
             SwapStruct memory swapValues = SwapStruct(
-                msg.sender,
+                _walletAddress,
                 "token1",
                 "token2",
                 _amount,
                 _swapRatio,
                 token2Amount
             );
-            swapStructMapping[msg.sender].push(swapValues);
+            swapStructMapping[_walletAddress].push(swapValues);
 
             SafeERC20.safeTransferFrom(
                 contractData._token1Contract,
-                msg.sender,
+               _walletAddress,
                 address(this),
                 _amount
             );
             SafeERC20.safeTransfer(
                 contractData._token2Contract,
-                msg.sender,
+                _walletAddress,
                 token2Amount
             );
             SafeERC20.safeTransfer(
@@ -376,7 +379,7 @@ contract Swap {
                 _fees
             );
             emit SwapTransaction(
-                msg.sender,
+                _walletAddress,
                 _conversionType,
                 _swapRatio,
                 token2Amount,
@@ -552,7 +555,7 @@ contract Swap {
         emit NumeratorFessUpdate(_value);
     }
 
-    /**
+    /** 
      * @dev Function to update the denominator value for fee calculation.
      * @param _value The new denominator value.
      * Requirements:
