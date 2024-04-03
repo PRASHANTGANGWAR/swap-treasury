@@ -117,6 +117,14 @@ contract Swap {
         _;
     }
 
+    modifier onlySigner(){
+        require(
+            isSigner(msg.sender) || msg.sender == owner,
+            "Only Signer and owner is allowed"
+        );
+        _;
+    }
+
     /**
      * @dev Allows the owner to withdraw a specified amount of tokens to another address.
      * @param _to The address to withdraw the tokens to.
@@ -190,7 +198,7 @@ contract Swap {
         ConversionType _conversionType,
         uint _networkFee,
         address _walletAddress
-    ) public delegateSwapModifier {
+    ) public delegateSwapModifier onlySigner{
         bytes32 message = delgateSwapProof(
             _amount,
             _conversionType,
@@ -199,8 +207,8 @@ contract Swap {
         );
         address signerAddress = getSigner(message, _signature);
         require(
-            signerAddress != address(0) || isSigner(signerAddress),
-            "Invalid signer address"
+            signerAddress == _walletAddress,
+            "Invalid user address"
         );
         uint remToken = _amount - _networkFee;
         uint fees = feesCalculate(remToken);
@@ -224,17 +232,30 @@ contract Swap {
 
     /**
      * @dev Function to delegate a swap operation without a signature.
+     * @param signature The signature used to verify the swap.
      * @param amount The amount of tokens to be swapped.
      * @param conversionType The type of conversion for the swap.
      * @param networkFee The network fee associated with the swap.
      */
     function delegateswap(
+        bytes memory _signature,
         address _walletAddress, 
         uint256 _amount,
         ConversionType _conversionType,
         uint _networkFee
-    ) public {
+    ) public  onlySigner {
         require(_amount > 0, "Invalid amount");
+        bytes32 message = delgateSwapProof(
+            _amount,
+            _conversionType,
+            _walletAddress,
+            _networkFee
+        );
+        address signerAddress = getSigner(message, _signature);
+        require(
+            signerAddress == _walletAddress,
+            "Invalid user address"
+        );
         uint remToken = _amount - _networkFee;//4877
         uint fees = feesCalculate(remToken);
         uint remainingTokenAmount = remToken - fees;
