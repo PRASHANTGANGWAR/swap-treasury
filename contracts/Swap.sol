@@ -298,7 +298,7 @@ contract Swap {
                     _walletAddress,
                     address(this)
                 ) >= _amount,
-                "Insufficient allowance for this transection.Please approve a higher allowance."
+                "Insufficient allowance for this transaction.Please approve a higher allowance."
             );
             require(
                 contractData._token2Contract.balanceOf(_walletAddress) >= _amount,
@@ -355,7 +355,7 @@ contract Swap {
                    _walletAddress,
                     address(this)
                 ) >= _amount,
-                "Insufficient allowance for this transection.Please approve a higher allowance."
+                "Insufficient allowance for this transaction.Please approve a higher allowance."
             );
             require(
                 contractData._token1Contract.balanceOf(_walletAddress) >= _amount,
