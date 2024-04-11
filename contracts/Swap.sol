@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./utils/ECDSA.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/utils/math/SafeMath.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
-contract Swap {
-    address public owner;
+contract Swap is Ownable {
     address feesWallet;
-    uint numerator = 1;
+    uint numerator = 5;
     uint denominator = 10;
     uint swapRatio;
     address networkFeeWallet;
@@ -53,19 +54,19 @@ contract Swap {
 
     // events
     event WithdrawTransaction(
-        address _to,
-        ConversionType _conversionType,
+        address indexed  _to,
+        ConversionType indexed _conversionType,
         uint amount
     );
     event SwapTransaction(
-        address _from,
-        ConversionType _conversionType,
-        uint _ratio,
+        address indexed  _from,
+        ConversionType indexed  _conversionType,
+        uint indexed _ratio,
         uint _sentAmount,
         uint receiveAmount
     );
-    event NumeratorFessUpdate(uint value);
-    event DenominatorFessUpdate(uint value);
+    event NumeratorFeesUpdate(uint value);
+    event DenominatorFeesUpdate(uint value);
     event UpdateSigner(address, bool);
     event UpdateSubAdmin(address, bool);
     event UpdateRatio(uint);
@@ -79,8 +80,7 @@ contract Swap {
         uint _token2Decimal,
         uint _ratio,
         address _networkFeeWallet
-    ) {
-        owner = msg.sender;
+    ) Ownable(msg.sender){
         contractData = ContractStruct(
             IERC20(_token1Address),
             _token1Decimal,
@@ -92,10 +92,6 @@ contract Swap {
         networkFeeWallet = _networkFeeWallet;
     }
 
-    modifier onlyOwner() {
-        require(msg.sender == owner, "Only the owner can call this function");
-        _;
-    }
 
     modifier swapIsEnabled() {
         require(swapWithSignatureEnabled, "Swapping is currently disabled");
@@ -103,7 +99,7 @@ contract Swap {
     }
     modifier onlySubAdminOrOwner() {
         require(
-            subAdmin[msg.sender] || msg.sender == owner,
+            subAdmin[msg.sender] || msg.sender == owner(),
             "Only owner and sub admin can call this function"
         );
         _;
@@ -119,7 +115,7 @@ contract Swap {
 
     modifier onlySigner(){
         require(
-            isSigner(msg.sender) || msg.sender == owner,
+            isSigner(msg.sender) || msg.sender == owner(),
             "Only Signer and owner is allowed"
         );
         _;
@@ -166,7 +162,7 @@ contract Swap {
         require(_amount > 0, "Invalid amount");
         require(isSigner(signerAddress), "Invalid signer address");
         uint fees = feesCalculate(_amount);
-        uint remainingTokenAmount = _amount - fees;
+        uint remainingTokenAmount = SafeMath.sub(_amount, fees);
         _swap(msg.sender,_ratio, _conversionType, remainingTokenAmount, _amount, fees);
     }
 
@@ -181,7 +177,7 @@ contract Swap {
     ) public {
         require(_amount > 0, "Invalid amount");
         uint fees = feesCalculate(_amount);
-        uint remainingTokenAmount = _amount - fees;
+        uint remainingTokenAmount = SafeMath.sub(_amount, fees);
         _swap(msg.sender,swapRatio, _conversionType, remainingTokenAmount, _amount, fees);
     }
 
@@ -210,9 +206,9 @@ contract Swap {
             signerAddress == _walletAddress,
             "Invalid user address"
         );
-        uint remToken = _amount - _networkFee;
+        uint remToken = SafeMath.sub(_amount, _networkFee);
         uint fees = feesCalculate(remToken);
-        uint remainingTokenAmount = remToken - fees;
+        uint remainingTokenAmount = SafeMath.sub(remToken, fees);
         _swap(_walletAddress, swapRatio, _conversionType, remainingTokenAmount, _amount, fees);
         if (_conversionType == ConversionType.token1) {
             SafeERC20.safeTransfer(
@@ -256,9 +252,10 @@ contract Swap {
             signerAddress == _walletAddress,
             "Invalid user address"
         );
-        uint remToken = _amount - _networkFee;//4877
+        uint remToken = SafeMath.sub(_amount, _networkFee);//4877
         uint fees = feesCalculate(remToken);
-        uint remainingTokenAmount = remToken - fees;
+        uint remainingTokenAmount = SafeMath.sub(remToken, fees);
+
         _swap(_walletAddress, swapRatio, _conversionType, remainingTokenAmount, _amount, fees);
         if (_conversionType == ConversionType.token1) {
             SafeERC20.safeTransfer(
@@ -284,7 +281,7 @@ contract Swap {
      * @param _amount The total amount of tokens to be swapped.
      * @param _fees The fees associated with the swap
      */
-     function _swap(
+    function _swap(
         address _walletAddress,
         uint _swapRatio,
         ConversionType _conversionType,
@@ -304,11 +301,8 @@ contract Swap {
                 contractData._token2Contract.balanceOf(_walletAddress) >= _amount,
                 "Insufficient balance"
             );
-            uint256 token2BaseUnits = _remainingTokenAmount *
-                (10 ** contractData._token2Decimals);
-
-            uint token1Amount = ((token2BaseUnits * 100) / swapRatio) /
-                (10 ** contractData._token2Decimals);
+            uint token2BaseUnits = SafeMath.mul(_remainingTokenAmount, (10 ** contractData._token2Decimals));
+            uint token1Amount = SafeMath.div(SafeMath.div(SafeMath.mul(token2BaseUnits, 100), swapRatio), (10 ** contractData._token2Decimals));
             require(
                 contractData._token1Contract.balanceOf(address(this)) >=
                     token1Amount,
@@ -361,11 +355,8 @@ contract Swap {
                 contractData._token1Contract.balanceOf(_walletAddress) >= _amount,
                 "Insufficient balance"
             );
-            uint256 token1BaseUnits = _remainingTokenAmount *
-                (10 ** contractData._token1Decimals);
-
-            uint token2Amount = ((token1BaseUnits * swapRatio) / 100) /
-                (10 ** contractData._token1Decimals);
+            uint token1BaseUnits = SafeMath.mul(_remainingTokenAmount, (10 ** contractData._token1Decimals));
+            uint token2Amount = SafeMath.div(SafeMath.div(SafeMath.mul(token1BaseUnits,swapRatio), 100),(10 ** contractData._token1Decimals));
 
             require(
                 contractData._token2Contract.balanceOf(address(this)) >=
@@ -573,7 +564,7 @@ contract Swap {
      */
     function updateNumerator(uint _value) external onlySubAdminOrOwner {
         numerator = _value;
-        emit NumeratorFessUpdate(_value);
+        emit NumeratorFeesUpdate(_value);
     }
 
     /** 
@@ -584,7 +575,7 @@ contract Swap {
      */
     function updateDenominator(uint _value) external onlySubAdminOrOwner {
         denominator = _value;
-        emit DenominatorFessUpdate(_value);
+        emit DenominatorFeesUpdate(_value);
     }
 
     /**
@@ -609,7 +600,7 @@ contract Swap {
      * @return The calculated fees.
      */
     function feesCalculate(uint _amount) public view returns (uint) {
-        return ((((_amount * numerator) / denominator) * 1) / 100);
+        return SafeMath.div(SafeMath.div(SafeMath.mul(_amount,numerator), denominator), 100);
     }
 
     /**
