@@ -7,11 +7,10 @@ import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 contract Swap is Ownable {
-    address feesWallet;
     uint numerator = 5;
     uint denominator = 10;
     uint swapRatio;
-    address networkFeeWallet;
+    address public networkFeeWallet;
     bool public swapWithSignatureEnabled = false;
     bool public delegateSwapWithSignatureEnabled = false;
     ContractStruct public contractData;
@@ -644,7 +643,7 @@ contract Swap is Ownable {
      * Requirements:
      * - No specific requirements.
      */
-    function updateSwapToggle(bool _value) external {
+    function updateSwapToggle(bool _value) external onlySubAdminOrOwner {
         require(swapWithSignatureEnabled != _value, "Already exists");
         swapWithSignatureEnabled = _value;
         emit SwapEnabled(_value);
@@ -656,7 +655,7 @@ contract Swap is Ownable {
      * Requirements:
      * - No specific requirements.
      */
-    function updateDelegateSwapToggle(bool _value) external {
+    function updateDelegateSwapToggle(bool _value) external onlySubAdminOrOwner {
         require(delegateSwapWithSignatureEnabled != _value, "Already exist");
         delegateSwapWithSignatureEnabled = _value;
         emit DelegateSwapEnabled(_value);
@@ -667,7 +666,7 @@ contract Swap is Ownable {
      * @param _address The address of the  token contract to be assigned to `_token1Contract`.
      * @param _value The decimal value of the  token to be assigned to `_token1Decimals`.
      */
-    function updateToken1Instance(address _address, uint _value) external {
+    function updateToken1Instance(address _address, uint _value) external onlySubAdminOrOwner {
         contractData._token1Contract = IERC20(_address);
         contractData._token1Decimals = _value;
     }
@@ -677,9 +676,17 @@ contract Swap is Ownable {
      * @param _address The address of the  token contract to be assigned to `_token2Contract`.
      * @param _value The decimal value of the  token to be assigned to `_token2Decimals`.
      */
-    function updateToken2Instance(address _address, uint _value) external {
+    function updateToken2Instance(address _address, uint _value) external onlySubAdminOrOwner {
         contractData._token2Contract = IERC20(_address);
         contractData._token2Decimals = _value;
     }
 
+    /**
+     * @dev Updates the network fee wallet.
+     * @param _address The address of the  network fee wallet.`.
+     */
+    function updateNetworkFeeWallet(address _address) external onlySubAdminOrOwner {
+        require(networkFeeWallet != _address, "Already exists");
+        networkFeeWallet = _address
+    }
 }
