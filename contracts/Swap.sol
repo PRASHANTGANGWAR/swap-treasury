@@ -687,6 +687,6 @@ contract Swap is Ownable {
      */
     function updateNetworkFeeWallet(address _address) external onlySubAdminOrOwner {
         require(networkFeeWallet != _address, "Already exists");
-        networkFeeWallet = _address
+        networkFeeWallet = _address;
     }
 }
