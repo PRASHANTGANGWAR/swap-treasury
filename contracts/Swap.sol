@@ -79,7 +79,7 @@ contract Swap is Ownable {
         uint _token2Decimal,
         uint _ratio,
         address _networkFeeWallet
-    ) Ownable(msg.sender){
+    ) Ownable(msg.sender) {
         contractData = ContractStruct(
             IERC20(_token1Address),
             _token1Decimal,
@@ -112,7 +112,7 @@ contract Swap is Ownable {
         _;
     }
 
-    modifier onlySigner(){
+    modifier onlySigner() {
         require(
             isSigner(msg.sender) || msg.sender == owner(),
             "Only Signer and owner is allowed"
@@ -162,7 +162,7 @@ contract Swap is Ownable {
         require(isSigner(signerAddress), "Invalid signer address");
         uint fees = feesCalculate(_amount);
         uint remainingTokenAmount = SafeMath.sub(_amount, fees);
-        _swap(msg.sender,_ratio, _conversionType, remainingTokenAmount, _amount, fees);
+        _swap(msg.sender,_ratio, _conversionType, remainingTokenAmount, _amount);
     }
 
     /**
@@ -170,14 +170,19 @@ contract Swap is Ownable {
      * @param _amount The amount of tokens to be swapped.
      * @param _conversionType The type of conversion for the swap.
      */
-    function swapDirect(
-        uint256 _amount,
-        ConversionType _conversionType
-    ) public {
+    function swapDirect(uint256 _amount, ConversionType _conversionType)
+        public
+    {
         require(_amount > 0, "Invalid amount");
         uint fees = feesCalculate(_amount);
         uint remainingTokenAmount = SafeMath.sub(_amount, fees);
-        _swap(msg.sender,swapRatio, _conversionType, remainingTokenAmount, _amount, fees);
+        _swap(
+            msg.sender,
+            swapRatio,
+            _conversionType,
+            remainingTokenAmount,
+            _amount
+        );
     }
 
     /**
@@ -193,7 +198,7 @@ contract Swap is Ownable {
         ConversionType _conversionType,
         uint _networkFee,
         address _walletAddress
-    ) public delegateSwapModifier onlySigner{
+    ) public delegateSwapModifier onlySigner {
         bytes32 message = delgateSwapProof(
             _amount,
             _conversionType,
@@ -201,14 +206,17 @@ contract Swap is Ownable {
             _networkFee
         );
         address signerAddress = getSigner(message, _signature);
-        require(
-            signerAddress == _walletAddress,
-            "Invalid user address"
-        );
+        require(signerAddress == _walletAddress, "Invalid user address");
         uint remToken = SafeMath.sub(_amount, _networkFee);
         uint fees = feesCalculate(remToken);
         uint remainingTokenAmount = SafeMath.sub(remToken, fees);
-        _swap(_walletAddress, swapRatio, _conversionType, remainingTokenAmount, _amount, fees);
+        _swap(
+            _walletAddress,
+            swapRatio,
+            _conversionType,
+            remainingTokenAmount,
+            _amount
+        );
         if (_conversionType == ConversionType.token1) {
             SafeERC20.safeTransfer(
                 contractData._token2Contract,
@@ -234,11 +242,11 @@ contract Swap is Ownable {
      */
     function delegateswap(
         bytes memory _signature,
-        address _walletAddress, 
+        address _walletAddress,
         uint256 _amount,
         ConversionType _conversionType,
         uint _networkFee
-    ) public  onlySigner {
+    ) public onlySigner {
         require(_amount > 0, "Invalid amount");
         bytes32 message = delgateSwapProof(
             _amount,
@@ -247,18 +255,21 @@ contract Swap is Ownable {
             _networkFee
         );
         address signerAddress = getSigner(message, _signature);
-        require(
-            signerAddress == _walletAddress,
-            "Invalid user address"
-        );
-        uint remToken = SafeMath.sub(_amount, _networkFee);//4877
+        require(signerAddress == _walletAddress, "Invalid user address");
+        uint remToken = SafeMath.sub(_amount, _networkFee); //4877
         uint fees = feesCalculate(remToken);
         uint remainingTokenAmount = SafeMath.sub(remToken, fees);
 
-        _swap(_walletAddress, swapRatio, _conversionType, remainingTokenAmount, _amount, fees);
+        _swap(
+            _walletAddress,
+            swapRatio,
+            _conversionType,
+            remainingTokenAmount,
+            _amount
+        );
         if (_conversionType == ConversionType.token1) {
             SafeERC20.safeTransfer(
-               contractData._token2Contract,
+                contractData._token2Contract,
                 networkFeeWallet,
                 _networkFee
             );
@@ -271,7 +282,6 @@ contract Swap is Ownable {
             );
         }
     }
-
     /**
      * @dev Internal function to perform the swap operation.
      * @param _swapRatio The conversion ratio for the swap.
@@ -285,8 +295,7 @@ contract Swap is Ownable {
         uint _swapRatio,
         ConversionType _conversionType,
         uint _remainingTokenAmount,
-        uint _amount,
-        uint _fees
+        uint _amount
     ) internal {
         if (_conversionType == ConversionType.token1) {
             require(
@@ -297,14 +306,27 @@ contract Swap is Ownable {
                 "Insufficient allowance for this transaction.Please approve a higher allowance."
             );
             require(
-                contractData._token2Contract.balanceOf(_walletAddress) >= _amount,
+                SafeMath.mul(
+                    contractData._token2Contract.balanceOf(_walletAddress),
+                    (10 ** contractData._token2Decimals)
+                ) >= _amount,
                 "Insufficient balance"
             );
-            uint token2BaseUnits = SafeMath.mul(_remainingTokenAmount, (10 ** contractData._token2Decimals));
-            uint token1Amount = SafeMath.div(SafeMath.div(SafeMath.mul(token2BaseUnits, 100), swapRatio), (10 ** contractData._token2Decimals));
+            uint token1Amount = SafeMath.mul(
+                SafeMath.div(
+                    SafeMath.div(
+                        SafeMath.mul(_remainingTokenAmount, 100),
+                        swapRatio
+                    ),
+                    (10**contractData._token2Decimals)
+                ),
+                (10 ** contractData._token1Decimals)
+            );
             require(
-                contractData._token1Contract.balanceOf(address(this)) >=
-                    token1Amount,
+                SafeMath.mul(
+                    contractData._token1Contract.balanceOf(address(this)),
+                    (10 ** contractData._token1Decimals)
+                ) >= token1Amount,
                 "Insufficient balance for swap"
             );
 
@@ -328,11 +350,6 @@ contract Swap is Ownable {
                 contractData._token1Contract,
                 _walletAddress,
                 token1Amount
-            );
-            SafeERC20.safeTransfer(
-                contractData._token2Contract,
-                address(this),
-                _fees
             );
             emit SwapTransaction(
                 _walletAddress,
@@ -345,21 +362,34 @@ contract Swap is Ownable {
         if (_conversionType == ConversionType.token2) {
             require(
                 contractData._token1Contract.allowance(
-                   _walletAddress,
+                    _walletAddress,
                     address(this)
                 ) >= _amount,
                 "Insufficient allowance for this transaction.Please approve a higher allowance."
             );
             require(
-                contractData._token1Contract.balanceOf(_walletAddress) >= _amount,
+                SafeMath.mul(
+                    contractData._token1Contract.balanceOf(_walletAddress),
+                    (10 ** contractData._token1Decimals)
+                ) >= _amount,
                 "Insufficient balance"
             );
-            uint token1BaseUnits = SafeMath.mul(_remainingTokenAmount, (10 ** contractData._token1Decimals));
-            uint token2Amount = SafeMath.div(SafeMath.div(SafeMath.mul(token1BaseUnits,swapRatio), 100),(10 ** contractData._token1Decimals));
+            uint token2Amount = SafeMath.mul(
+                SafeMath.div(
+                    SafeMath.div(
+                        SafeMath.mul(_remainingTokenAmount, swapRatio),
+                        100
+                    ),
+                    (10 ** contractData._token1Decimals)
+                ),
+                (10**contractData._token2Decimals)
+            ); 
 
             require(
-                contractData._token2Contract.balanceOf(address(this)) >=
-                    token2Amount,
+                SafeMath.mul(
+                    contractData._token2Contract.balanceOf(address(this)),
+                    (10 ** contractData._token2Decimals)
+                ) >= token2Amount,
                 "Insufficient balance for swap"
             );
 
@@ -375,7 +405,7 @@ contract Swap is Ownable {
 
             SafeERC20.safeTransferFrom(
                 contractData._token1Contract,
-               _walletAddress,
+                _walletAddress,
                 address(this),
                 _amount
             );
@@ -383,11 +413,6 @@ contract Swap is Ownable {
                 contractData._token2Contract,
                 _walletAddress,
                 token2Amount
-            );
-            SafeERC20.safeTransfer(
-                contractData._token1Contract,
-                address(this),
-                _fees
             );
             emit SwapTransaction(
                 _walletAddress,
@@ -522,10 +547,11 @@ contract Swap is Ownable {
      * @param _signature The signature used to verify the swap.
      * @return The address of the signer.
      */
-    function getSigner(
-        bytes32 _message,
-        bytes memory signature
-    ) public pure returns (address) {
+    function getSigner(bytes32 _message, bytes memory signature)
+        public
+        pure
+        returns (address)
+    {
         _message = ECDSA.toEthSignedMessageHash(_message);
         return ECDSA.recover(_message, signature);
     }
@@ -546,10 +572,10 @@ contract Swap is Ownable {
      * Requirements:
      * - Only the owner or sub-admin can call this function.
      */
-    function updateSigner(
-        address _address,
-        bool _value
-    ) external onlySubAdminOrOwner {
+    function updateSigner(address _address, bool _value)
+        external
+        onlySubAdminOrOwner
+    {
         require(signManagers[_address] != _value, "Already exixst");
         signManagers[_address] = _value;
         emit UpdateSigner(_address, _value);
@@ -561,12 +587,12 @@ contract Swap is Ownable {
      * Requirements:
      * - Only the owner or sub-admin can call this function.
      */
-    function updateNumerator(uint _value) external onlySubAdminOrOwner {
+    function updateNumerator(uint256 _value) external onlySubAdminOrOwner {
         numerator = _value;
         emit NumeratorFeesUpdate(_value);
     }
 
-    /** 
+    /**
      * @dev Function to update the denominator value for fee calculation.
      * @param _value The new denominator value.
      * Requirements:
@@ -599,7 +625,11 @@ contract Swap is Ownable {
      * @return The calculated fees.
      */
     function feesCalculate(uint _amount) public view returns (uint) {
-        return SafeMath.div(SafeMath.div(SafeMath.mul(_amount,numerator), denominator), 100);
+        return
+            SafeMath.div(
+                SafeMath.div(SafeMath.mul(_amount, numerator), denominator),
+                100
+            );
     }
 
     /**
@@ -655,7 +685,10 @@ contract Swap is Ownable {
      * Requirements:
      * - No specific requirements.
      */
-    function updateDelegateSwapToggle(bool _value) external onlySubAdminOrOwner {
+    function updateDelegateSwapToggle(bool _value)
+        external
+        onlySubAdminOrOwner
+    {
         require(delegateSwapWithSignatureEnabled != _value, "Already exist");
         delegateSwapWithSignatureEnabled = _value;
         emit DelegateSwapEnabled(_value);
@@ -666,7 +699,10 @@ contract Swap is Ownable {
      * @param _address The address of the  token contract to be assigned to `_token1Contract`.
      * @param _value The decimal value of the  token to be assigned to `_token1Decimals`.
      */
-    function updateToken1Instance(address _address, uint _value) external onlySubAdminOrOwner {
+    function updateToken1Instance(address _address, uint _value)
+        external
+        onlySubAdminOrOwner
+    {
         contractData._token1Contract = IERC20(_address);
         contractData._token1Decimals = _value;
     }
@@ -676,7 +712,10 @@ contract Swap is Ownable {
      * @param _address The address of the  token contract to be assigned to `_token2Contract`.
      * @param _value The decimal value of the  token to be assigned to `_token2Decimals`.
      */
-    function updateToken2Instance(address _address, uint _value) external onlySubAdminOrOwner {
+    function updateToken2Instance(address _address, uint _value)
+        external
+        onlySubAdminOrOwner
+    {
         contractData._token2Contract = IERC20(_address);
         contractData._token2Decimals = _value;
     }
@@ -685,7 +724,10 @@ contract Swap is Ownable {
      * @dev Updates the network fee wallet.
      * @param _address The address of the  network fee wallet.`.
      */
-    function updateNetworkFeeWallet(address _address) external onlySubAdminOrOwner {
+    function updateNetworkFeeWallet(address _address)
+        external
+        onlySubAdminOrOwner
+    {
         require(networkFeeWallet != _address, "Already exists");
         networkFeeWallet = _address;
     }
