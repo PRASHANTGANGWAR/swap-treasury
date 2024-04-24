@@ -256,7 +256,7 @@ contract Swap is Ownable {
         );
         address signerAddress = getSigner(message, _signature);
         require(signerAddress == _walletAddress, "Invalid user address");
-        uint remToken = SafeMath.sub(_amount, _networkFee); //4877
+        uint remToken = SafeMath.sub(_amount, _networkFee);
         uint fees = feesCalculate(remToken);
         uint remainingTokenAmount = SafeMath.sub(remToken, fees);
 
@@ -329,7 +329,6 @@ contract Swap is Ownable {
                 ) >= token1Amount,
                 "Insufficient balance for swap"
             );
-
             SwapStruct memory swapValues = SwapStruct(
                 _walletAddress,
                 "token2",
@@ -384,7 +383,6 @@ contract Swap is Ownable {
                 ),
                 (10**contractData._token2Decimals)
             ); 
-
             require(
                 SafeMath.mul(
                     contractData._token2Contract.balanceOf(address(this)),
@@ -392,7 +390,6 @@ contract Swap is Ownable {
                 ) >= token2Amount,
                 "Insufficient balance for swap"
             );
-
             SwapStruct memory swapValues = SwapStruct(
                 _walletAddress,
                 "token1",
