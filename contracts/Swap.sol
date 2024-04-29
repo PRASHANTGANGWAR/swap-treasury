@@ -323,10 +323,7 @@ contract Swap is Ownable {
                 (10 ** contractData._token1Decimals)
             );
             require(
-                SafeMath.mul(
-                    contractData._token1Contract.balanceOf(address(this)),
-                    (10 ** contractData._token1Decimals)
-                ) >= token1Amount,
+                    contractData._token1Contract.balanceOf(address(this)) >= token1Amount,
                 "Insufficient balance for swap"
             );
             SwapStruct memory swapValues = SwapStruct(
@@ -384,10 +381,7 @@ contract Swap is Ownable {
                 (10**contractData._token2Decimals)
             ); 
             require(
-                SafeMath.mul(
-                    contractData._token2Contract.balanceOf(address(this)),
-                    (10 ** contractData._token2Decimals)
-                ) >= token2Amount,
+                    contractData._token2Contract.balanceOf(address(this)) >= token2Amount,
                 "Insufficient balance for swap"
             );
             SwapStruct memory swapValues = SwapStruct(
