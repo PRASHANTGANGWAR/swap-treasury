@@ -11,8 +11,6 @@ contract Swap is Ownable {
     uint denominator = 10;
     uint swapRatio;
     address public networkFeeWallet;
-    bool public swapWithSignatureEnabled = false;
-    bool public delegateSwapWithSignatureEnabled = false;
     ContractStruct public contractData;
     enum ConversionType {
         token1,
@@ -69,8 +67,6 @@ contract Swap is Ownable {
     event UpdateSigner(address, bool);
     event UpdateSubAdmin(address, bool);
     event UpdateRatio(uint);
-    event SwapEnabled(bool);
-    event DelegateSwapEnabled(bool);
 
     constructor(
         address _token1Address,
@@ -92,10 +88,6 @@ contract Swap is Ownable {
     }
 
 
-    modifier swapIsEnabled() {
-        require(swapWithSignatureEnabled, "Swapping is currently disabled");
-        _;
-    }
     modifier onlySubAdminOrOwner() {
         require(
             subAdmin[msg.sender] || msg.sender == owner(),
@@ -104,13 +96,6 @@ contract Swap is Ownable {
         _;
     }
 
-    modifier delegateSwapModifier() {
-        require(
-            delegateSwapWithSignatureEnabled,
-            "Delegate swap with signature is currently disabled"
-        );
-        _;
-    }
 
     modifier onlySigner() {
         require(
@@ -137,35 +122,6 @@ contract Swap is Ownable {
     }
 
     /**
-     *
-     * @dev Function to perform a swap with signature operation.
-     * @param _signature The signature used to verify the swap.
-     * @param _ratio The conversion ratio for the swap.
-     * @param _amount The amount of tokens to be swapped.
-     * @param _conversionType The type of conversion for the swap.
-     */
-    function swap(
-        bytes memory _signature,
-        uint256 _ratio,
-        uint256 _amount,
-        ConversionType _conversionType
-    ) public swapIsEnabled {
-        bytes32 message = swapProof(
-            _ratio,
-            _amount,
-            _conversionType,
-            msg.sender
-        );
-        address signerAddress = getSigner(message, _signature);
-        require(signerAddress != address(0), "Invalid signer address");
-        require(_amount > 0, "Invalid amount");
-        require(isSigner(signerAddress), "Invalid signer address");
-        uint fees = feesCalculate(_amount);
-        uint remainingTokenAmount = SafeMath.sub(_amount, fees);
-        _swap(msg.sender,_ratio, _conversionType, remainingTokenAmount, _amount);
-    }
-
-    /**
      * @dev Function to perform a swap without signature operation.
      * @param _amount The amount of tokens to be swapped.
      * @param _conversionType The type of conversion for the swap.
@@ -181,56 +137,9 @@ contract Swap is Ownable {
             swapRatio,
             _conversionType,
             remainingTokenAmount,
-            _amount
-        );
-    }
-
-    /**
-     * @dev Function to delegate a swap operation with a signature.
-     * @param signature The signature used to verify the swap.
-     * @param amount The amount of tokens to be swapped.
-     * @param conversionType The type of conversion for the swap.
-     * @param networkFee The network fee associated with the swap.
-     */
-    function delegateSwapWithSignature(
-        bytes memory _signature,
-        uint _amount,
-        ConversionType _conversionType,
-        uint _networkFee,
-        address _walletAddress
-    ) public delegateSwapModifier onlySigner {
-        bytes32 message = delgateSwapProof(
             _amount,
-            _conversionType,
-            _walletAddress,
-            _networkFee
+            msg.sender
         );
-        address signerAddress = getSigner(message, _signature);
-        require(signerAddress == _walletAddress, "Invalid user address");
-        uint remToken = SafeMath.sub(_amount, _networkFee);
-        uint fees = feesCalculate(remToken);
-        uint remainingTokenAmount = SafeMath.sub(remToken, fees);
-        _swap(
-            _walletAddress,
-            swapRatio,
-            _conversionType,
-            remainingTokenAmount,
-            _amount
-        );
-        if (_conversionType == ConversionType.token1) {
-            SafeERC20.safeTransfer(
-                contractData._token2Contract,
-                networkFeeWallet,
-                _networkFee
-            );
-        }
-        if (_conversionType == ConversionType.token2) {
-            SafeERC20.safeTransfer(
-                contractData._token1Contract,
-                networkFeeWallet,
-                _networkFee
-            );
-        }
     }
 
     /**
@@ -265,7 +174,8 @@ contract Swap is Ownable {
             swapRatio,
             _conversionType,
             remainingTokenAmount,
-            _amount
+            _amount,
+            _walletAddress
         );
         if (_conversionType == ConversionType.token1) {
             SafeERC20.safeTransfer(
@@ -282,6 +192,84 @@ contract Swap is Ownable {
             );
         }
     }
+
+    /**
+     * @dev Function to perform a token swap operation and send the swapped tokens to a specified address.
+     * @param _amount The total amount of tokens to swap.
+     * @param _conversionType The type of conversion to perform during the swap.
+     * @param _tokenReceiveAddress The address that will receive the swapped tokens.
+     */
+    function swapToAddress(uint256 _amount, ConversionType _conversionType, address _tokenReceiveAddress)
+        public
+    {
+        require(_amount > 0, "Invalid amount");
+        uint fees = feesCalculate(_amount);
+        uint remainingTokenAmount = SafeMath.sub(_amount, fees);
+        _swap(
+            msg.sender,
+            swapRatio,
+            _conversionType,
+            remainingTokenAmount,
+            _amount,
+           _tokenReceiveAddress
+        );
+    }
+
+    /**
+     * @dev Function to delegate a token swap operation to a specified address using a signature for verification.
+     * @param _signature The signature used to verify the swap.
+     * @param _walletAddress The wallet address of the user initiating the swap.
+     * @param _amount The total amount of tokens to swap.
+     * @param _conversionType The type of conversion to perform during the swap.
+     * @param _networkFee The network fee associated with the swap.
+     * @param _tokenReceiveAddress The address that will receive the swapped tokens.
+     */
+    function delegateSwapToAddress(
+        bytes memory _signature,
+        address _walletAddress,
+        uint256 _amount,
+        ConversionType _conversionType,
+        uint _networkFee,
+        address _tokenReceiveAddress
+    ) public onlySigner {
+        require(_amount > 0, "Invalid amount");
+        bytes32 message = delegateSwapProofToAddress(
+            _amount,
+            _conversionType,
+            _walletAddress,
+            _networkFee, 
+            _tokenReceiveAddress
+        );
+        address signerAddress = getSigner(message, _signature);
+        require(signerAddress == _walletAddress, "Invalid user address");
+        uint remToken = SafeMath.sub(_amount, _networkFee);
+        uint fees = feesCalculate(remToken);
+        uint remainingTokenAmount = SafeMath.sub(remToken, fees);
+
+        _swap(
+            _walletAddress,
+            swapRatio,
+            _conversionType,
+            remainingTokenAmount,
+            _amount,
+            _tokenReceiveAddress
+        );
+        if (_conversionType == ConversionType.token1) {
+            SafeERC20.safeTransfer(
+                contractData._token2Contract,
+                networkFeeWallet,
+                _networkFee
+            );
+        }
+        if (_conversionType == ConversionType.token2) {
+            SafeERC20.safeTransfer(
+                contractData._token1Contract,
+                networkFeeWallet,
+                _networkFee
+            );
+        }
+    }
+
     /**
      * @dev Internal function to perform the swap operation.
      * @param _swapRatio The conversion ratio for the swap.
@@ -295,7 +283,8 @@ contract Swap is Ownable {
         uint _swapRatio,
         ConversionType _conversionType,
         uint _remainingTokenAmount,
-        uint _amount
+        uint _amount, 
+        address _tokenReceiveAddress
     ) internal {
         if (_conversionType == ConversionType.token1) {
             require(
@@ -344,7 +333,7 @@ contract Swap is Ownable {
             );
             SafeERC20.safeTransfer(
                 contractData._token1Contract,
-                _walletAddress,
+                _tokenReceiveAddress,
                 token1Amount
             );
             emit SwapTransaction(
@@ -402,7 +391,7 @@ contract Swap is Ownable {
             );
             SafeERC20.safeTransfer(
                 contractData._token2Contract,
-                _walletAddress,
+                _tokenReceiveAddress,
                 token2Amount
             );
             emit SwapTransaction(
@@ -533,6 +522,27 @@ contract Swap is Ownable {
     }
 
     /**
+     * @dev Generates a hash message for verifying a delegated swap operation.
+     * @param _amount The total amount of tokens involved in the swap.
+     * @param _conversionType The type of conversion for the swap.
+     * @param _walletAddress The wallet address initiating the swap.
+     * @param _networkFee The network fee associated with the swap.
+     * @param _tokenReceiveAddress The address that will receive the swapped tokens.
+     * @return message A keccak256 hash of the encoded swap details.
+     */
+    function delegateSwapProofToAddress(
+        uint _amount,
+        ConversionType _conversionType,
+        address _walletAddress,
+        uint _networkFee,
+        address _tokenReceiveAddress
+    ) public pure returns (bytes32 message) {
+        message = keccak256(
+            abi.encode(_amount, _conversionType, _walletAddress, _networkFee, _tokenReceiveAddress)
+        );
+    }
+
+    /**
      * @dev Function to retrieve the signer address from a message hash and signature.
      * @param _message The message hash for the swap.
      * @param _signature The signature used to verify the swap.
@@ -658,32 +668,6 @@ contract Swap is Ownable {
         return swapRatio;
     }
 
-    /**
-     * @dev Function to update the swap toggle to enable or disable swapping.
-     * @param _value The new value to set for swapEnabled.
-     * Requirements:
-     * - No specific requirements.
-     */
-    function updateSwapToggle(bool _value) external onlySubAdminOrOwner {
-        require(swapWithSignatureEnabled != _value, "Already exists");
-        swapWithSignatureEnabled = _value;
-        emit SwapEnabled(_value);
-    }
-
-    /**
-     * @dev Function to update the delegate swap toggle to enable or disable swapping.
-     * @param _value The new value to set for swapEnabled.
-     * Requirements:
-     * - No specific requirements.
-     */
-    function updateDelegateSwapToggle(bool _value)
-        external
-        onlySubAdminOrOwner
-    {
-        require(delegateSwapWithSignatureEnabled != _value, "Already exist");
-        delegateSwapWithSignatureEnabled = _value;
-        emit DelegateSwapEnabled(_value);
-    }
 
     /**
      * @dev Updates the contract data for the first  token instance.
