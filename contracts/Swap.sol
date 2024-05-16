@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
-import "./utils/ECDSA.sol";
+
+import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 contract Swap is Ownable {
@@ -51,13 +52,13 @@ contract Swap is Ownable {
 
     // events
     event WithdrawTransaction(
-        address indexed  _to,
+        address indexed _to,
         ConversionType indexed _conversionType,
         uint amount
     );
     event SwapTransaction(
-        address indexed  _from,
-        ConversionType indexed  _conversionType,
+        address indexed _from,
+        ConversionType indexed _conversionType,
         uint indexed _ratio,
         uint _sentAmount,
         uint receiveAmount
@@ -108,7 +109,7 @@ contract Swap is Ownable {
     /**
      * @dev Allows the owner to withdraw a specified amount of tokens to another address.
      * @param _to The address to withdraw the tokens to.
-     * @param _type The type of withdrawal.
+     * @param _conversionType The type of withdrawal.
      * @param _amount The amount of tokens to withdraw.
      */
 
@@ -127,11 +128,11 @@ contract Swap is Ownable {
      * @param _conversionType The type of conversion for the swap.
      */
     function swapDirect(uint256 _amount, ConversionType _conversionType)
-        public
+    public
     {
         require(_amount > 0, "Invalid amount");
         uint fees = feesCalculate(_amount);
-        uint remainingTokenAmount = SafeMath.sub(_amount, fees);
+        uint remainingTokenAmount = _amount - fees;
         _swap(
             msg.sender,
             swapRatio,
@@ -144,10 +145,10 @@ contract Swap is Ownable {
 
     /**
      * @dev Function to delegate a swap operation without a signature.
-     * @param signature The signature used to verify the swap.
-     * @param amount The amount of tokens to be swapped.
-     * @param conversionType The type of conversion for the swap.
-     * @param networkFee The network fee associated with the swap.
+     * @param _signature The signature used to verify the swap.
+     * @param _amount The amount of tokens to be swapped.
+     * @param _conversionType The type of conversion for the swap.
+     * @param _networkFee The network fee associated with the swap.
      */
     function delegateswap(
         bytes memory _signature,
@@ -165,9 +166,9 @@ contract Swap is Ownable {
         );
         address signerAddress = getSigner(message, _signature);
         require(signerAddress == _walletAddress, "Invalid user address");
-        uint remToken = SafeMath.sub(_amount, _networkFee);
+        uint remToken = _amount - _networkFee;
         uint fees = feesCalculate(remToken);
-        uint remainingTokenAmount = SafeMath.sub(remToken, fees);
+        uint remainingTokenAmount = remToken - fees;
 
         _swap(
             _walletAddress,
@@ -200,18 +201,18 @@ contract Swap is Ownable {
      * @param _tokenReceiveAddress The address that will receive the swapped tokens.
      */
     function swapToAddress(uint256 _amount, ConversionType _conversionType, address _tokenReceiveAddress)
-        public
+    public
     {
         require(_amount > 0, "Invalid amount");
         uint fees = feesCalculate(_amount);
-        uint remainingTokenAmount = SafeMath.sub(_amount, fees);
+        uint remainingTokenAmount = _amount - fees;
         _swap(
             msg.sender,
             swapRatio,
             _conversionType,
             remainingTokenAmount,
             _amount,
-           _tokenReceiveAddress
+            _tokenReceiveAddress
         );
     }
 
@@ -237,14 +238,14 @@ contract Swap is Ownable {
             _amount,
             _conversionType,
             _walletAddress,
-            _networkFee, 
+            _networkFee,
             _tokenReceiveAddress
         );
         address signerAddress = getSigner(message, _signature);
         require(signerAddress == _walletAddress, "Invalid user address");
-        uint remToken = SafeMath.sub(_amount, _networkFee);
+        uint remToken = _amount - _networkFee;
         uint fees = feesCalculate(remToken);
-        uint remainingTokenAmount = SafeMath.sub(remToken, fees);
+        uint remainingTokenAmount = remToken - fees;
 
         _swap(
             _walletAddress,
@@ -276,14 +277,13 @@ contract Swap is Ownable {
      * @param _conversionType The type of conversion for the swap.
      * @param _remainingTokenAmount The remaining amount of tokens after deducting fees and network fees.
      * @param _amount The total amount of tokens to be swapped.
-     * @param _fees The fees associated with the swap
      */
     function _swap(
         address _walletAddress,
         uint _swapRatio,
         ConversionType _conversionType,
         uint _remainingTokenAmount,
-        uint _amount, 
+        uint _amount,
         address _tokenReceiveAddress
     ) internal {
         if (_conversionType == ConversionType.token1) {
@@ -295,24 +295,24 @@ contract Swap is Ownable {
                 "Insufficient allowance for this transaction.Please approve a higher allowance."
             );
             require(
-                SafeMath.mul(
-                    contractData._token2Contract.balanceOf(_walletAddress),
+                (
+                    contractData._token2Contract.balanceOf(_walletAddress) *
                     (10 ** contractData._token2Decimals)
                 ) >= _amount,
                 "Insufficient balance"
             );
-            uint token1Amount = SafeMath.mul(
-                SafeMath.div(
-                    SafeMath.div(
-                        SafeMath.mul(_remainingTokenAmount, 100),
+            uint token1Amount = (
+                (
+                    (
+                        (_remainingTokenAmount * 100) /
                         swapRatio
-                    ),
-                    (10**contractData._token2Decimals)
-                ),
+                    ) /
+                    (10 ** contractData._token2Decimals)
+                ) *
                 (10 ** contractData._token1Decimals)
             );
             require(
-                    contractData._token1Contract.balanceOf(address(this)) >= token1Amount,
+                contractData._token1Contract.balanceOf(address(this)) >= token1Amount,
                 "Insufficient balance for swap"
             );
             SwapStruct memory swapValues = SwapStruct(
@@ -353,24 +353,24 @@ contract Swap is Ownable {
                 "Insufficient allowance for this transaction.Please approve a higher allowance."
             );
             require(
-                SafeMath.mul(
-                    contractData._token1Contract.balanceOf(_walletAddress),
+                (
+                    contractData._token1Contract.balanceOf(_walletAddress) *
                     (10 ** contractData._token1Decimals)
                 ) >= _amount,
                 "Insufficient balance"
             );
-            uint token2Amount = SafeMath.mul(
-                SafeMath.div(
-                    SafeMath.div(
-                        SafeMath.mul(_remainingTokenAmount, swapRatio),
+            uint token2Amount = (
+                (
+                    (
+                        (_remainingTokenAmount * swapRatio) /
                         100
-                    ),
+                    ) /
                     (10 ** contractData._token1Decimals)
-                ),
-                (10**contractData._token2Decimals)
-            ); 
+                ) *
+                (10 ** contractData._token2Decimals)
+            );
             require(
-                    contractData._token2Contract.balanceOf(address(this)) >= token2Amount,
+                contractData._token2Contract.balanceOf(address(this)) >= token2Amount,
                 "Insufficient balance for swap"
             );
             SwapStruct memory swapValues = SwapStruct(
@@ -476,20 +476,20 @@ contract Swap is Ownable {
      * @return An array of withdrawal transaction structs.
      */
     function getWithdrawStructArray()
-        external
-        view
-        returns (WithdrawStruct[] memory)
+    external
+    view
+    returns (WithdrawStruct[] memory)
     {
         return withdrawStructArray;
     }
 
     /**
      * @dev Function to generate a proof for a swap operation.
-     * @param ratio The conversion ratio for the swap.
-     * @param amount The amount of tokens to be swapped.
-     * @param conversionType The type of conversion for the swap.
-     * @param receiver The receiver address for the swap.
-     * @return The generated message hash for the swap proof.
+     * @param _ratio The conversion ratio for the swap.
+     * @param _amount The amount of tokens to be swapped.
+     * @param _conversionType The type of conversion for the swap.
+     * @param _receiver The receiver address for the swap.
+     * @return message The generated message hash for the swap proof.
      */
     function swapProof(
         uint256 _ratio,
@@ -548,13 +548,13 @@ contract Swap is Ownable {
      * @param _signature The signature used to verify the swap.
      * @return The address of the signer.
      */
-    function getSigner(bytes32 _message, bytes memory signature)
-        public
-        pure
-        returns (address)
+    function getSigner(bytes32 _message, bytes memory _signature)
+    public
+    pure
+    returns (address)
     {
-        _message = ECDSA.toEthSignedMessageHash(_message);
-        return ECDSA.recover(_message, signature);
+        _message = MessageHashUtils.toEthSignedMessageHash(_message);
+        return ECDSA.recover(_message, _signature);
     }
 
     /**
@@ -574,8 +574,8 @@ contract Swap is Ownable {
      * - Only the owner or sub-admin can call this function.
      */
     function updateSigner(address _address, bool _value)
-        external
-        onlySubAdminOrOwner
+    external
+    onlySubAdminOrOwner
     {
         require(signManagers[_address] != _value, "Already exixst");
         signManagers[_address] = _value;
@@ -627,10 +627,13 @@ contract Swap is Ownable {
      */
     function feesCalculate(uint _amount) public view returns (uint) {
         return
-            SafeMath.div(
-                SafeMath.div(SafeMath.mul(_amount, numerator), denominator),
-                100
-            );
+        (
+            (
+                (_amount * numerator)
+                / denominator
+            )/
+            100
+        );
     }
 
     /**
@@ -668,15 +671,14 @@ contract Swap is Ownable {
         return swapRatio;
     }
 
-
     /**
      * @dev Updates the contract data for the first  token instance.
      * @param _address The address of the  token contract to be assigned to `_token1Contract`.
      * @param _value The decimal value of the  token to be assigned to `_token1Decimals`.
      */
     function updateToken1Instance(address _address, uint _value)
-        external
-        onlySubAdminOrOwner
+    external
+    onlySubAdminOrOwner
     {
         contractData._token1Contract = IERC20(_address);
         contractData._token1Decimals = _value;
@@ -688,8 +690,8 @@ contract Swap is Ownable {
      * @param _value The decimal value of the  token to be assigned to `_token2Decimals`.
      */
     function updateToken2Instance(address _address, uint _value)
-        external
-        onlySubAdminOrOwner
+    external
+    onlySubAdminOrOwner
     {
         contractData._token2Contract = IERC20(_address);
         contractData._token2Decimals = _value;
@@ -700,8 +702,8 @@ contract Swap is Ownable {
      * @param _address The address of the  network fee wallet.`.
      */
     function updateNetworkFeeWallet(address _address)
-        external
-        onlySubAdminOrOwner
+    external
+    onlySubAdminOrOwner
     {
         require(networkFeeWallet != _address, "Already exists");
         networkFeeWallet = _address;
