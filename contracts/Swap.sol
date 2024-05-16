@@ -286,31 +286,21 @@ contract Swap is Ownable {
         uint _amount,
         address _tokenReceiveAddress
     ) internal {
+        uint fees = feesCalculate(_amount);
+
         if (_conversionType == ConversionType.token1) {
             require(
                 contractData._token2Contract.allowance(
                     _walletAddress,
                     address(this)
                 ) >= _amount,
-                "Insufficient allowance for this transaction.Please approve a higher allowance."
+                "Insufficient allowance for this transaction. Please approve a higher allowance."
             );
             require(
-                (
-                    contractData._token2Contract.balanceOf(_walletAddress) *
-                    (10 ** contractData._token2Decimals)
-                ) >= _amount,
+                contractData._token2Contract.balanceOf(_walletAddress) >= _amount,
                 "Insufficient balance"
             );
-            uint token1Amount = (
-                (
-                    (
-                        (_remainingTokenAmount * 100) /
-                        swapRatio
-                    ) /
-                    (10 ** contractData._token2Decimals)
-                ) *
-                (10 ** contractData._token1Decimals)
-            );
+            uint token1Amount = (_remainingTokenAmount * 100 / swapRatio) * (10 ** contractData._token1Decimals) / (10 ** contractData._token2Decimals);
             require(
                 contractData._token1Contract.balanceOf(address(this)) >= token1Amount,
                 "Insufficient balance for swap"
@@ -331,11 +321,11 @@ contract Swap is Ownable {
                 address(this),
                 _amount
             );
-            SafeERC20.safeTransfer(
-                contractData._token1Contract,
-                _tokenReceiveAddress,
-                token1Amount
-            );
+            SafeERC20.safeTransfer(contractData._token1Contract, _tokenReceiveAddress, token1Amount);
+
+            investorFees[_walletAddress] += fees;
+            totalFees += fees;
+
             emit SwapTransaction(
                 _walletAddress,
                 _conversionType,
@@ -350,25 +340,13 @@ contract Swap is Ownable {
                     _walletAddress,
                     address(this)
                 ) >= _amount,
-                "Insufficient allowance for this transaction.Please approve a higher allowance."
+                "Insufficient allowance for this transaction. Please approve a higher allowance."
             );
             require(
-                (
-                    contractData._token1Contract.balanceOf(_walletAddress) *
-                    (10 ** contractData._token1Decimals)
-                ) >= _amount,
+                contractData._token1Contract.balanceOf(_walletAddress) >= _amount,
                 "Insufficient balance"
             );
-            uint token2Amount = (
-                (
-                    (
-                        (_remainingTokenAmount * swapRatio) /
-                        100
-                    ) /
-                    (10 ** contractData._token1Decimals)
-                ) *
-                (10 ** contractData._token2Decimals)
-            );
+            uint token2Amount = (_remainingTokenAmount * swapRatio / 100) * (10 ** contractData._token2Decimals) / (10 ** contractData._token1Decimals);
             require(
                 contractData._token2Contract.balanceOf(address(this)) >= token2Amount,
                 "Insufficient balance for swap"
@@ -389,11 +367,16 @@ contract Swap is Ownable {
                 address(this),
                 _amount
             );
+
             SafeERC20.safeTransfer(
                 contractData._token2Contract,
                 _tokenReceiveAddress,
                 token2Amount
             );
+
+            investorFees[_walletAddress] += fees;
+            totalFees += fees;
+
             emit SwapTransaction(
                 _walletAddress,
                 _conversionType,
@@ -626,14 +609,7 @@ contract Swap is Ownable {
      * @return The calculated fees.
      */
     function feesCalculate(uint _amount) public view returns (uint) {
-        return
-        (
-            (
-                (_amount * numerator)
-                / denominator
-            )/
-            100
-        );
+        return (_amount * numerator / denominator) / 100;
     }
 
     /**
@@ -708,4 +684,97 @@ contract Swap is Ownable {
         require(networkFeeWallet != _address, "Already exists");
         networkFeeWallet = _address;
     }
+
+    /// Liqudity pool section
+
+    struct Investment {
+        uint amount;
+        uint lockEndTime;
+        bool withdrawn;
+    }
+
+    mapping(address => Investment[]) public investments;
+
+    event LiquidityAdded(address indexed investor, uint amount, uint lockEndTime);
+    event LiquidityWithdrawn(address indexed investor, uint amount);
+
+    /**
+    * @dev Allows investors to add liquidity to the pool.
+    * @param _amount The amount of liquidity to add.
+    * @param _lockPeriod The locking period for the liquidity (0, 7 days, or 30 days).
+    */
+    function addLiquidity(uint _amount, uint _lockPeriod) external {
+        require(_amount > 0, "Amount must be greater than 0");
+        require(_lockPeriod == 0 || _lockPeriod == 7 days || _lockPeriod == 30 days, "Invalid lock period");
+
+        uint lockEndTime = block.timestamp + _lockPeriod;
+        investments[msg.sender].push(Investment(_amount, lockEndTime, false));
+        SafeERC20.safeTransferFrom(contractData._token1Contract, msg.sender, address(this), _amount);
+
+        emit LiquidityAdded(msg.sender, _amount, lockEndTime);
+    }
+
+    /**
+     * @dev Allows investors to withdraw their liquidity after the lock period has ended.
+     * @param _index The index of the investment to withdraw.
+     */
+    function withdrawLiquidity(uint _index) external {
+        Investment storage investment = investments[msg.sender][_index];
+        require(!investment.withdrawn, "Liquidity already withdrawn");
+        require(block.timestamp >= investment.lockEndTime, "Lock period not ended");
+
+        investment.withdrawn = true;
+        SafeERC20.safeTransfer(contractData._token1Contract, msg.sender, investment.amount);
+
+        emit LiquidityWithdrawn(msg.sender, investment.amount);
+    }
+
+    /**
+    * @dev Allows the admin to add liquidity to rebalance the pool.
+    * @param _amount The amount of liquidity to add.
+    */
+    function rebalancePool(uint _amount) external onlyOwner {
+        SafeERC20.safeTransferFrom(contractData._token1Contract, msg.sender, address(this), _amount);
+    }
+
+    mapping(address => uint) public investorFees;
+    uint public totalFees;
+
+    /**
+     * @dev Allows investors to withdraw their accumulated fees.
+     */
+    function withdrawFees() external {
+        uint fees = investorFees[msg.sender];
+        require(fees > 0, "No fees available for withdrawal");
+
+        investorFees[msg.sender] = 0;
+        totalFees -= fees;
+
+        SafeERC20.safeTransfer(contractData._token1Contract, msg.sender, fees);
+
+        emit WithdrawTransaction(msg.sender, ConversionType.token1, fees);
+    }
+
+    /**
+     * @dev Calculates the total fees accumulated by an investor.
+     * @param _investor The address of the investor.
+     * @return The total accumulated fees.
+     */
+    function calculateFees(address _investor) public view returns (uint) {
+        return investorFees[_investor];
+    }
+
+    mapping(address => bool) public managers;
+
+    /**
+     * @dev Updates the manager status of an address.
+     * @param _address The address to update.
+     * @param _value The new manager status.
+     */
+    function updateManager(address _address, bool _value) external onlyOwner {
+        require(managers[_address] != _value, "Already exists");
+        managers[_address] = _value;
+        emit UpdateSigner(_address, _value); // Reusing existing event for simplicity
+    }
+
 }
