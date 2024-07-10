@@ -6,6 +6,7 @@ import "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts/utils/structs/EnumerableMap.sol";
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
@@ -14,19 +15,20 @@ interface IERC20Extended is IERC20 {
     function decimals() external view returns (uint8);
 }
 
-contract MergedContract is Initializable, UUPSUpgradeable, OwnableUpgradeable {
+contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     using SafeERC20 for IERC20Extended;
 
     uint public numerator;
     uint public denominator;
     uint public swapRatio;
-    uint256 public eligibilityPeriod = 5 * 60 / 15; // Assuming average block time of 15 seconds
+    uint256 public eligibilityPeriod;
     uint256 public swapFeePercent;
     address public networkFeeWallet;
     address public admin;
     bool public whitelistEnabled;
     uint256 public totalLiquidityUSDT;
     uint256 public totalFeesCollectedUSDT;
+    uint8 public minimumLiquidityPercentage;
 
     struct ContractStruct {
         IERC20Extended ntzcContract;
@@ -45,9 +47,19 @@ contract MergedContract is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         uint256 blockNumber;
     }
 
+    struct FeeProfit {
+        uint256 amount;
+        uint256 blockNumber;
+    }
+
     struct Investor {
         Investment[] investments;
+        FeeProfit[] feeProfits;
+        bool isInvestor;
     }
+
+    using EnumerableMap for EnumerableMap.UintToAddressMap;
+    EnumerableMap.UintToAddressMap private investorsList;
 
     mapping(address => Investor) investors;
     mapping(address => uint256) public investorBalancesUSDT;
@@ -130,7 +142,9 @@ contract MergedContract is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         uint256 _swapFeePercent,
         uint _ratio,
         address _networkFeeWallet,
-        address _initialOwner
+        address _initialOwner,
+        uint8 _minimumLiquidityPercentage,
+        uint256 _eligibilityPeriod
     ) public initializer {
         require(_initialOwner != address(0), "Initial owner cannot be zero address");
         numerator = 5;
@@ -146,15 +160,22 @@ contract MergedContract is Initializable, UUPSUpgradeable, OwnableUpgradeable {
             IERC20Extended(_usdt)
         );
         signManagers[_initialOwner] = true;
+        minimumLiquidityPercentage = _minimumLiquidityPercentage;
+        eligibilityPeriod = _eligibilityPeriod;
     }
 
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
 
     function addLiquidity(address token, uint256 amount) external onlyWhitelisted {
         require(token == address(contractData.usdtContract), "Only USDT is accepted for liquidity");
-        contractData.usdtContract.safeTransferFrom(msg.sender, address(this), amount);
+        contractData.usdtContract.safeTransferFrom(_msgSender(), address(this), amount);
 
-        investors[msg.sender].investments.push(Investment(amount, block.number));
+        if(investors[_msgSender()].isInvestor == false){
+            investorsList.set(investorsList.length(), _msgSender());
+        }
+
+        investors[_msgSender()].investments.push(Investment(amount, block.number));
+        investors[_msgSender()].isInvestor = true;
         investorBalancesUSDT[msg.sender] += amount;
         totalLiquidityUSDT += amount;
 
@@ -166,51 +187,52 @@ contract MergedContract is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         require(amount <= investorBalancesUSDT[msg.sender], "Cannot withdraw more than in balance");
 
         if (msg.sender != admin) {
-            uint256 minRequiredBalance = (totalLiquidityUSDT - investorBalancesUSDT[admin]) * 85 / 100;
+            uint256 minRequiredBalance = (totalLiquidityUSDT - investorBalancesUSDT[admin]) * minimumLiquidityPercentage / 100;
             require(contractData.usdtContract.balanceOf(address(this)) >= minRequiredBalance, "Contract is out of balance, try later");
         }
 
-        uint256 eligibleInvestmentAmount = getEligibleInvestmentAmount(msg.sender);
-        uint256 eligibleForThisWithdrawal = amount > eligibleInvestmentAmount ? eligibleInvestmentAmount : amount;
-        uint256 feeShare = (eligibleForThisWithdrawal * totalFeesCollectedUSDT) / totalLiquidityUSDT;
-        uint256 totalAmountToWithdraw = amount + feeShare;
-
-        updateInvestorInvestments(msg.sender, amount);
-
+        updateAllInvestorProfits();
+        updateInvestorInvestments(_msgSender(), amount);
         totalLiquidityUSDT -= amount;
-        totalFeesCollectedUSDT -= feeShare;
-
+        uint256 profit = getCurrentInvestorProfits(_msgSender());
+        uint256 totalAmountToWithdraw = amount + profit;
         contractData.usdtContract.safeTransfer(msg.sender, totalAmountToWithdraw);
-        emit LiquidityWithdrawn(msg.sender, totalAmountToWithdraw, token, amount, feeShare);
+        withdrawFees();
+        emit LiquidityWithdrawn(msg.sender, totalAmountToWithdraw, token, amount, profit);
     }
 
+    function getCurrentInvestorProfits(address investor) public view returns (uint256) {
+        uint256 totalProfit = 0;
 
-    // function withdrawLiquidity(address token, uint256 amount) external {
-    //     require(token == address(contractData.usdtContract), "Only USDT withdrawals are allowed");
-    //     require(amount <= investorBalancesUSDT[msg.sender], "Cannot withdraw more than in balance");
-
-    //     uint256 eligibleInvestmentAmount = getEligibleInvestmentAmount(msg.sender);
-    //     uint256 eligibleForThisWithdrawal = amount > eligibleInvestmentAmount ? eligibleInvestmentAmount : amount;
-    //     uint256 feeShare = (eligibleForThisWithdrawal * totalFeesCollectedUSDT) / totalLiquidityUSDT;
-    //     uint256 totalAmountToWithdraw = amount + feeShare;
-
-    //     updateInvestorInvestments(msg.sender, amount);
-
-    //     totalLiquidityUSDT -= amount;
-    //     totalFeesCollectedUSDT -= feeShare;
-
-    //     contractData.usdtContract.safeTransfer(msg.sender, totalAmountToWithdraw);
-    //     emit LiquidityWithdrawn(msg.sender, totalAmountToWithdraw, token, amount, feeShare);
-    // }
-
-    function getEligibleInvestmentAmount(address investor) public view returns (uint256) {
-        uint256 eligibleAmount = 0;
-        for (uint256 i = 0; i < investors[investor].investments.length; i++) {
-            if (block.number - investors[investor].investments[i].blockNumber >= eligibilityPeriod) {
-                eligibleAmount += investors[investor].investments[i].amount;
-            }
+        for (uint256 i = 0; i < investors[investor].feeProfits.length; i++) {
+            totalProfit += investors[investor].feeProfits[i].amount;
         }
-        return eligibleAmount;
+        return totalProfit;
+    }
+
+    function updateAllInvestorProfits() public onlyAdminOrOwner {
+        uint256 liquidityCounter = totalLiquidityUSDT;
+        for (uint256 i = 0; i < investorsList.length(); i++) {
+            (uint256 mapKey, address investor) = investorsList.at(i);
+            updateInvestorProfits(investor, liquidityCounter);
+            liquidityCounter -= investorBalancesUSDT[investor];
+        }
+    }
+
+    function updateInvestorProfits(address investor, uint256 liquidityCounter) internal {
+        uint256 eligibleInvestmentAmount = getInvestmentAmount(_msgSender());
+        uint256 feeShare = (eligibleInvestmentAmount * totalFeesCollectedUSDT) / liquidityCounter;
+        totalFeesCollectedUSDT -= feeShare;
+
+        investors[investor].feeProfits.push(FeeProfit(feeShare, block.number));
+    }
+
+    function getInvestmentAmount(address investor) public view returns (uint256) {
+        uint256 amount = 0;
+        for (uint256 i = 0; i < investors[investor].investments.length; i++) {
+            amount += investors[investor].investments[i].amount;
+        }
+        return amount;
     }
 
     function updateEligibilityPeriod(uint256 blocks) external onlyAdminOrOwner {
@@ -234,7 +256,14 @@ contract MergedContract is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         investorBalancesUSDT[msg.sender] -= amount;
     }
 
+    function withdrawFees() internal {
+        while(investors[_msgSender()].feeProfits.length > 0) {
+            investors[_msgSender()].feeProfits.pop();
+        }
+    }
+
     function rebalancePool(uint256 amount) external onlyAdminOrOwner {
+        require(amount > 0, "Amount must be greater than zero");
         contractData.usdtContract.safeTransferFrom(msg.sender, address(this), amount);
 
         uint256 contractBalance = contractData.usdtContract.balanceOf(address(this));
@@ -263,6 +292,10 @@ contract MergedContract is Initializable, UUPSUpgradeable, OwnableUpgradeable {
             }
         }
         emit ManagerRemoved(manager);
+    }
+
+    function updateMinimumLiquidityPercentage(uint8 newPercentage) external onlyAdminOrOwner {
+        minimumLiquidityPercentage = newPercentage;
     }
 
     function updateSwapFeePercent(uint256 newSwapFeePercent) external onlyManagers {
