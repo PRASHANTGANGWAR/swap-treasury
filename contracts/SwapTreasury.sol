@@ -168,6 +168,7 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
 
     function addLiquidity(address token, uint256 amount) external onlyWhitelisted {
         require(token == address(contractData.usdtContract), "Only USDT is accepted for liquidity");
+        updateAllInvestorProfits();
         contractData.usdtContract.safeTransferFrom(_msgSender(), address(this), amount);
 
         if(investors[_msgSender()].isInvestor == false){
@@ -561,6 +562,14 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         );
     }
 
+    function withdrawAdmin(
+        address _to,
+        ConversionType _conversionType,
+        uint _amount
+    ) public onlyAdminOrOwner {
+        _withdraw(_to, _conversionType, _amount);
+    }
+    
     function validateAllowanceAndBalance(
         ConversionType _conversionType,
         address _walletAddress,
