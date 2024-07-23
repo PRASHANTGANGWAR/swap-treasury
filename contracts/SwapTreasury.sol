@@ -567,6 +567,7 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         ConversionType _conversionType,
         uint _amount
     ) public onlyAdminOrOwner {
+        require(_conversionType == ConversionType.ntzc,"Only NTZC withdrawals are allowed.");
         _withdraw(_to, _conversionType, _amount);
     }
     
