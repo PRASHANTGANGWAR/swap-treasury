@@ -184,6 +184,7 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     }
 
     function withdrawLiquidity(address token, uint256 amount) external {
+        require(amount > 0, "Amount must be greater than zero");
         require(token == address(contractData.usdtContract), "Only USDT withdrawals are allowed");
         require(amount <= investorBalancesUSDT[msg.sender], "Cannot withdraw more than in balance");
 
@@ -211,16 +212,20 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         return totalProfit;
     }
 
-    function updateAllInvestorProfits() public onlyAdminOrOwner {
+    function updateAllInvestorProfits() private {
         uint256 liquidityCounter = totalLiquidityUSDT;
         for (uint256 i = 0; i < investorsList.length(); i++) {
-            (uint256 mapKey, address investor) = investorsList.at(i);
+            (, address investor) = investorsList.at(i);
             updateInvestorProfits(investor, liquidityCounter);
             liquidityCounter -= investorBalancesUSDT[investor];
         }
     }
 
-    function updateInvestorProfits(address investor, uint256 liquidityCounter) internal {
+    function updateAllInvestorProfitsAdmin() public onlyAdminOrOwner {
+        updateAllInvestorProfits();
+    }
+
+    function updateInvestorProfits(address investor, uint256 liquidityCounter) private {
         uint256 eligibleInvestmentAmount = getInvestmentAmount(_msgSender());
         uint256 feeShare = (eligibleInvestmentAmount * totalFeesCollectedUSDT) / liquidityCounter;
         totalFeesCollectedUSDT -= feeShare;
@@ -240,7 +245,7 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         eligibilityPeriod = blocks;
     }
 
-    function updateInvestorInvestments(address investor, uint256 amount) internal {
+    function updateInvestorInvestments(address investor, uint256 amount) private {
         uint256 remainingAmount = amount;
         for (uint256 i = 0; i < investors[investor].investments.length; i++) {
             if (remainingAmount == 0) break;
