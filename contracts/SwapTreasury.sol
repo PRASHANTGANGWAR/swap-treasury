@@ -183,10 +183,10 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         emit LiquidityAdded(msg.sender, amount, token);
     }
 
-    function withdrawLiquidity(address token, uint256 amount) external {
+    function withdrawLiquidity(address token, uint256 amount) external  onlyWhitelisted{
         require(amount > 0, "Amount must be greater than zero");
         require(token == address(contractData.usdtContract), "Only USDT withdrawals are allowed");
-        require(amount <= investorBalancesUSDT[msg.sender], "Cannot withdraw more than in balance");
+        require(amount > 0 && amount <= investorBalancesUSDT[msg.sender], "Cannot withdraw more than the balance or amount is zero");
 
         if (msg.sender != admin) {
             uint256 minRequiredBalance = (totalLiquidityUSDT - investorBalancesUSDT[admin]) * minimumLiquidityPercentage / 100;
@@ -572,6 +572,7 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         ConversionType _conversionType,
         uint _amount
     ) public onlyAdminOrOwner {
+        require(_conversionType == ConversionType.ntzc,"Only NTZC withdrawals are allowed.");
         _withdraw(_to, _conversionType, _amount);
     }
     
