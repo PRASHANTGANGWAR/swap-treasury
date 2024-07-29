@@ -66,6 +66,7 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     mapping(address => bool) public signManagers;
     mapping(address => bool) public subAdmin;
     mapping(address => bool) public whitelist;
+    mapping(address => uint256) public nonces; // unique count for address
 
     address[] public managers;
 
@@ -226,7 +227,7 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     }
 
     function updateInvestorProfits(address investor, uint256 liquidityCounter) private {
-        uint256 eligibleInvestmentAmount = getInvestmentAmount(_msgSender());
+        uint256 eligibleInvestmentAmount = getInvestmentAmount(_msgSender()); 
         uint256 feeShare = (eligibleInvestmentAmount * totalFeesCollectedUSDT) / liquidityCounter;
         totalFeesCollectedUSDT -= feeShare;
 
@@ -381,12 +382,13 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         uint256 _amount,
         ConversionType _conversionType,
         uint _networkFee,
-        address _tokenReceiveAddress
+        address _tokenReceiveAddress,
+        uint _nonce
     ) public onlySigner {
         validateAllowanceAndBalance(_conversionType, _walletAddress, _amount);
-    
+        require(_nonce == nonces[_walletAddress], "Invalid nonce");
         bytes32 message = keccak256(
-            abi.encode(_amount, _conversionType, _walletAddress, _networkFee, _tokenReceiveAddress)
+            abi.encode(_amount, _conversionType, _walletAddress, _networkFee, _tokenReceiveAddress, _nonce)
         );
         address signerAddress = getSigner(message, _signature);
         require(signerAddress == _walletAddress, "Invalid user address");
@@ -418,6 +420,7 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
                 _networkFee
             );
         }
+        nonces[_walletAddress]++;
     }
 
     function _swap(
@@ -572,7 +575,6 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         ConversionType _conversionType,
         uint _amount
     ) public onlyAdminOrOwner {
-        require(_conversionType == ConversionType.ntzc,"Only NTZC withdrawals are allowed.");
         _withdraw(_to, _conversionType, _amount);
     }
     
