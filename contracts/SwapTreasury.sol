@@ -190,7 +190,7 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         require(amount > 0 && amount <= investorBalancesUSDT[msg.sender], "Cannot withdraw more than the balance or amount is zero");
 
         if (msg.sender != admin) {
-            uint256 minRequiredBalance = (totalLiquidityUSDT - investorBalancesUSDT[admin]) * minimumLiquidityPercentage / 100;
+            uint256 minRequiredBalance = (totalLiquidityUSDT - investorBalancesUSDT[admin] - investorBalancesUSDT[owner()]) * minimumLiquidityPercentage / 100;
             require(contractData.usdtContract.balanceOf(address(this)) >= minRequiredBalance, "Contract is out of balance, try later");
         }
 
@@ -227,7 +227,7 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     }
 
     function updateInvestorProfits(address investor, uint256 liquidityCounter) private {
-        uint256 eligibleInvestmentAmount = getInvestmentAmount(_msgSender()); 
+        uint256 eligibleInvestmentAmount = getInvestmentAmount(investor);
         uint256 feeShare = (eligibleInvestmentAmount * totalFeesCollectedUSDT) / liquidityCounter;
         totalFeesCollectedUSDT -= feeShare;
 
@@ -274,6 +274,8 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         contractData.usdtContract.safeTransferFrom(msg.sender, address(this), amount);
 
         uint256 contractBalance = contractData.usdtContract.balanceOf(address(this));
+        require(contractBalance >= totalLiquidityUSDT, "Contract balance exceeds total liquidity");
+
         uint256 excessLiquidity = amount > totalLiquidityUSDT - contractBalance ? amount - (totalLiquidityUSDT - contractBalance) : 0;
 
         if (excessLiquidity > 0) {
@@ -385,8 +387,11 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         address _tokenReceiveAddress,
         uint _nonce
     ) public onlySigner {
-        validateAllowanceAndBalance(_conversionType, _walletAddress, _amount);
         require(_nonce == nonces[_walletAddress], "Invalid nonce");
+        nonces[_walletAddress]++;
+
+        validateAllowanceAndBalance(_conversionType, _walletAddress, _amount);
+    
         bytes32 message = keccak256(
             abi.encode(_amount, _conversionType, _walletAddress, _networkFee, _tokenReceiveAddress, _nonce)
         );
@@ -420,7 +425,6 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
                 _networkFee
             );
         }
-        nonces[_walletAddress]++;
     }
 
     function _swap(
