@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
-import "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
+
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -10,7 +9,7 @@ import "@openzeppelin/contracts/utils/structs/EnumerableMap.sol";
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-
+import "./IAccess.sol";
 interface IERC20Extended is IERC20 {
     function decimals() external view returns (uint8);
 }
@@ -18,18 +17,11 @@ interface IERC20Extended is IERC20 {
 contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     using SafeERC20 for IERC20Extended;
 
-    uint public numerator;
-    uint public denominator;
-    uint public swapRatio;
-    uint256 public eligibilityPeriod;
-    uint256 public swapFeePercent;
-    address public networkFeeWallet;
-    address public admin;
-    bool public whitelistEnabled;
+  
     uint256 public totalLiquidityUSDT;
     uint256 public totalFeesCollectedUSDT;
-    uint8 public minimumLiquidityPercentage;
 
+    IAccess public  accessContract;
     struct ContractStruct {
         IERC20Extended ntzcContract;
         IERC20Extended usdtContract;
@@ -63,12 +55,8 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
 
     mapping(address => Investor) investors;
     mapping(address => uint256) public investorBalancesUSDT;
-    mapping(address => bool) public signManagers;
-    mapping(address => bool) public subAdmin;
-    mapping(address => bool) public whitelist;
     mapping(address => uint256) public nonces; // unique count for address
 
-    address[] public managers;
 
     event WithdrawTransaction(
         address indexed to,
@@ -86,83 +74,41 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         uint receivedAmount
     );
 
-    event NumeratorFeesUpdate(uint value);
-    event DenominatorFeesUpdate(uint value);
-    event UpdateSigner(address indexed signer, bool value);
-    event UpdateSubAdmin(address indexed subAdmin, bool value);
-    event UpdateRatio(uint value);
-    event UpdateNetworkFeeWallet(address indexed networkFeeWallet);
     event LiquidityAdded(address indexed investor, uint256 amount, address token);
     event LiquidityWithdrawn(address indexed investor, uint256 fullAmount, address token, uint256 baseInvestment, uint256 fee);
     event PoolRebalanced(uint256 amount, address token);
     event SwapExecuted(address indexed client, address tokenIn, address tokenOut, uint256 amountIn, uint256 amountOut, address indexed receiver, uint256 fee);
-    event InvestorWhitelisted(address indexed investor);
-    event InvestorRemovedFromWhitelist(address indexed investor);
-    event WhitelistEnabled(bool enabled);
-    event ManagerAdded(address indexed manager);
-    event ManagerRemoved(address indexed manager);
-    event SwapFeePercentUpdated(uint256 newSwapFeePercent);
-    event AdminUpdated(address indexed newAdmin);
 
-    modifier onlySubAdminOrOwner() {
-        require(subAdmin[msg.sender] || msg.sender == owner(), "Only owner and sub admin can call this function");
-        _;
-    }
 
     modifier onlySigner() {
-        require(isSigner(msg.sender) || msg.sender == owner(), "Only signer and owner is allowed");
+        require(accessContract.isSigner(msg.sender) || msg.sender == owner(), "Only signer and owner is allowed");
         _;
     }
 
-    modifier onlyAdminOrOwner() {
-        require(msg.sender == admin || msg.sender == owner(), "Not authorized");
+   modifier onlyAdminOrOwner()  {
+        require(msg.sender == accessContract.admin() || msg.sender == owner(), "Not authorized");
         _;
     }
 
-    modifier onlyManagers() {
-        bool isManager = false;
-        for (uint i = 0; i < managers.length; i++) {
-            if (managers[i] == msg.sender) {
-                isManager = true;
-                break;
-            }
-        }
-        require(isManager, "Not a manager");
-        _;
-    }
 
     modifier onlyWhitelisted() {
-        require(!whitelistEnabled || whitelist[msg.sender], "Not whitelisted");
+        require(!accessContract.whitelistEnabled() || accessContract.whitelist(msg.sender), "Not whitelisted");
         _;
     }
 
     function initialize(
         address _usdt,
         address _ntzc,
-        address _admin,
-        uint256 _swapFeePercent,
-        uint _ratio,
-        address _networkFeeWallet,
         address _initialOwner,
-        uint8 _minimumLiquidityPercentage,
-        uint256 _eligibilityPeriod
-    ) public initializer {
+       address _accessContract
+    ) public initializer  {
         require(_initialOwner != address(0), "Initial owner cannot be zero address");
-        numerator = 5;
-        denominator = 10;
-        admin = _admin;
-        swapFeePercent = _swapFeePercent;
-        swapRatio = _ratio;
-        networkFeeWallet = _networkFeeWallet;
         __Ownable_init(_initialOwner);
-        whitelistEnabled = false; 
         contractData = ContractStruct(
             IERC20Extended(_ntzc),
             IERC20Extended(_usdt)
         );
-        signManagers[_initialOwner] = true;
-        minimumLiquidityPercentage = _minimumLiquidityPercentage;
-        eligibilityPeriod = _eligibilityPeriod;
+        accessContract = IAccess(_accessContract);
     }
 
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
@@ -189,8 +135,8 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         require(token == address(contractData.usdtContract), "Only USDT withdrawals are allowed");
         require(amount > 0 && amount <= investorBalancesUSDT[msg.sender], "Cannot withdraw more than the balance or amount is zero");
 
-        if (msg.sender != admin) {
-            uint256 minRequiredBalance = (totalLiquidityUSDT - investorBalancesUSDT[admin] - investorBalancesUSDT[owner()]) * minimumLiquidityPercentage / 100;
+        if (msg.sender != accessContract.admin()) {
+            uint256 minRequiredBalance = (totalLiquidityUSDT - investorBalancesUSDT[accessContract.admin()] - investorBalancesUSDT[owner()]) * accessContract.minimumLiquidityPercentage() / 100;
             require(contractData.usdtContract.balanceOf(address(this)) >= minRequiredBalance, "Contract is out of balance, try later");
         }
 
@@ -242,15 +188,12 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         return amount;
     }
 
-    function updateEligibilityPeriod(uint256 blocks) external onlyAdminOrOwner {
-        eligibilityPeriod = blocks;
-    }
 
     function updateInvestorInvestments(address investor, uint256 amount) private {
         uint256 remainingAmount = amount;
         for (uint256 i = 0; i < investors[investor].investments.length; i++) {
             if (remainingAmount == 0) break;
-            if (block.number - investors[investor].investments[i].blockNumber >= eligibilityPeriod) {
+            if (block.number - investors[investor].investments[i].blockNumber >= accessContract.eligibilityPeriod()) {
                 if (investors[investor].investments[i].amount <= remainingAmount) {
                     remainingAmount -= investors[investor].investments[i].amount;
                     investors[investor].investments[i].amount = 0;
@@ -287,50 +230,7 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         emit PoolRebalanced(amount, address(contractData.usdtContract));
     }
 
-    function addManager(address manager) external onlyOwner {
-        managers.push(manager);
-        emit ManagerAdded(manager);
-    }
 
-    function removeManager(address manager) external onlyOwner {
-        for (uint i = 0; i < managers.length; i++) {
-            if (managers[i] == manager) {
-                managers[i] = managers[managers.length - 1];
-                managers.pop();
-                break;
-            }
-        }
-        emit ManagerRemoved(manager);
-    }
-
-    function updateMinimumLiquidityPercentage(uint8 newPercentage) external onlyAdminOrOwner {
-        minimumLiquidityPercentage = newPercentage;
-    }
-
-    function updateSwapFeePercent(uint256 newSwapFeePercent) external onlyManagers {
-        swapFeePercent = newSwapFeePercent;
-        emit SwapFeePercentUpdated(newSwapFeePercent);
-    }
-
-    function updateAdmin(address newAdmin) external onlyOwner {
-        admin = newAdmin;
-        emit AdminUpdated(newAdmin);
-    }
-
-    function addInvestorToWhitelist(address investor) external onlyAdminOrOwner {
-        whitelist[investor] = true;
-        emit InvestorWhitelisted(investor);
-    }
-
-    function removeInvestorFromWhitelist(address investor) external onlyAdminOrOwner {
-        whitelist[investor] = false;
-        emit InvestorRemovedFromWhitelist(investor);
-    }
-
-    function enableWhitelist(bool enabled) external onlyAdminOrOwner {
-        whitelistEnabled = enabled;
-        emit WhitelistEnabled(enabled);
-    }
 
     // Swap-related methods from the first contract
 
@@ -349,7 +249,7 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         address _tokenReceiveAddress
     ) public {
         validateAllowanceAndBalance(_conversionType, msg.sender, _amount);
-        uint fees = feesCalculate(_amount);
+        uint fees = accessContract.feesCalculate(_amount);
 
         uint256 feesInUSDT = convertFeesToUsdt(fees, _conversionType);
         totalFeesCollectedUSDT += feesInUSDT;
@@ -358,7 +258,7 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
 
         _swap(
             msg.sender,
-            swapRatio,
+            accessContract.swapRatio(),
             _conversionType,
             remainingTokenAmount,
             _amount,
@@ -368,7 +268,7 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
 
     function convertFeesToUsdt(uint256 _feeAmount, ConversionType _conversionType) public view returns (uint256 usdtFeeAmount)  {
         if(_conversionType == ConversionType.usdt) {
-            uint usdtAmount = (((_feeAmount * swapRatio) / 100) *
+            uint usdtAmount = (((_feeAmount * accessContract.swapRatio()) / 100) *
                 (10 ** contractData.usdtContract.decimals())) /
                 (10 ** contractData.ntzcContract.decimals());
             return usdtAmount;
@@ -395,10 +295,10 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         bytes32 message = keccak256(
             abi.encode(_amount, _conversionType, _walletAddress, _networkFee, _tokenReceiveAddress, _nonce)
         );
-        address signerAddress = getSigner(message, _signature);
+        address signerAddress = accessContract.getSigner(message, _signature);
         require(signerAddress == _walletAddress, "Invalid user address");
         uint remainingToken = _amount - _networkFee;
-        uint fees = feesCalculate(remainingToken);
+        uint fees = accessContract.feesCalculate(remainingToken);
         uint256 feesInUSDT = convertFeesToUsdt(fees, _conversionType);
         totalFeesCollectedUSDT += feesInUSDT;
 
@@ -406,7 +306,7 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
 
         _swap(
             _walletAddress,
-            swapRatio,
+            accessContract.swapRatio(),
             _conversionType,
             remainingTokenAmount,
             _amount,
@@ -415,13 +315,13 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         if (_conversionType == ConversionType.ntzc) {
             SafeERC20.safeTransfer(
                 contractData.usdtContract,
-                networkFeeWallet,
+                accessContract.networkFeeWallet(),
                 _networkFee
             );
         } else if (_conversionType == ConversionType.usdt) {
             SafeERC20.safeTransfer(
                 contractData.ntzcContract,
-                networkFeeWallet,
+                accessContract.networkFeeWallet(),
                 _networkFee
             );
         }
@@ -437,7 +337,7 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     ) internal {
         if (_conversionType == ConversionType.ntzc) {
             uint ntzcAmount = ((_remainingTokenAmount * 100) /
-                swapRatio *
+                accessContract.swapRatio() *
                 (10 ** contractData.ntzcContract.decimals())) /
                 (10 ** contractData.usdtContract.decimals());
             require(
@@ -466,7 +366,7 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
                 _amount
             );
         } else if (_conversionType == ConversionType.usdt) {
-            uint usdtAmount = (((_remainingTokenAmount * swapRatio) / 100) *
+            uint usdtAmount = (((_remainingTokenAmount * accessContract.swapRatio()) / 100) *
                 (10 ** contractData.usdtContract.decimals())) /
                 (10 ** contractData.ntzcContract.decimals());
             require(
@@ -495,56 +395,6 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
                 _amount
             );
         }
-    }
-
-    function feesCalculate(uint _amount) public view returns (uint) {
-        uint fees = (((_amount * numerator) / denominator) / 100);
-        return fees;
-    }
-
-    function updateSignManager(
-        address _signManagerAddress,
-        bool _value
-    ) public onlySubAdminOrOwner {
-        require(
-            signManagers[_signManagerAddress] != _value,
-            "Signer already exist"
-        );
-        signManagers[_signManagerAddress] = _value;
-        emit UpdateSigner(_signManagerAddress, _value);
-    }
-
-    function updateSubAdmin(address _subAdmin, bool _value) public onlyOwner {
-        require(subAdmin[_subAdmin] != _value, "Sub admin already exist");
-        subAdmin[_subAdmin] = _value;
-        emit UpdateSubAdmin(_subAdmin, _value);
-    }
-
-    function setNumerator(uint256 value) public onlySubAdminOrOwner {
-        numerator = value;
-        emit NumeratorFeesUpdate(value);
-    }
-
-    function setDenominator(uint256 value) public onlySubAdminOrOwner {
-        denominator = value;
-        emit DenominatorFeesUpdate(value);
-    }
-
-    function setRatio(uint _ratio) public onlySubAdminOrOwner {
-        swapRatio = _ratio;
-        emit UpdateRatio(_ratio);
-    }
-
-    function isSigner(address _address) public view returns (bool) {
-        return signManagers[_address];
-    }
-
-    function getSigner(
-        bytes32 _message,
-        bytes memory signature
-    ) public pure returns (address) {
-        _message = MessageHashUtils.toEthSignedMessageHash(_message);
-        return ECDSA.recover(_message, signature);
     }
 
     function _withdraw(
@@ -598,9 +448,12 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         );
     }
 
-    function updateNetworkFeeWallet(address _networkFeeWallet) public onlySubAdminOrOwner {
-        require(networkFeeWallet != _networkFeeWallet, "Network fee wallet already exist");
-        networkFeeWallet = _networkFeeWallet;
-        emit UpdateNetworkFeeWallet(_networkFeeWallet);
+    function numerator() public  view  returns(uint256){
+        return  accessContract.numerator();
     }
+
+    function denominator() public  view  returns(uint256){
+        return  accessContract.denominator();
+    }
+
 }
