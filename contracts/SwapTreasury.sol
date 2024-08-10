@@ -195,7 +195,7 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     }
 
 
-    function updateInvestorInvestments(address investor, uint256 amount) public  returns(uint256){
+    function updateInvestorInvestments(address investor, uint256 amount) private  returns(uint256){
         uint256 remainingAmount = amount;
         uint256 eligibleBalance = 0;
         for (uint256 i = 0; i < investors[investor].investments.length; i++) {
