@@ -13,12 +13,6 @@ interface IAccess {
         uint256 _eligibilityPeriod
     ) external;
 
-    // Function to add a manager
-    function addManager(address manager) external;
-
-    // Function to remove a manager
-    function removeManager(address manager) external;
-
     // Function to set the numerator
     function setNumerator(uint256 value) external;
 
@@ -76,5 +70,5 @@ interface IAccess {
     function minimumLiquidityPercentage() external view returns (uint8);
     function whitelistEnabled() external view returns (bool);
     function admin() external view returns (address);
-    function managers(uint) external view returns (address);
+    function eligibility(address) external view returns (bool);
 }

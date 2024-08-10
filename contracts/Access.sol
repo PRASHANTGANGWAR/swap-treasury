@@ -8,6 +8,7 @@ contract Access is Ownable {
     mapping(address => bool) public signManagers;
     mapping(address => bool) public subAdmin;
     mapping(address => bool) public whitelist;
+    mapping(address => bool) public eligibility;
 
     uint public numerator = 5 ;
     uint public denominator = 10;
@@ -27,13 +28,13 @@ contract Access is Ownable {
     event MinimumLiquidityPercentageUpdated(uint8 newPercentage);
     event UpdateSigner(address indexed signer, bool value);
     event UpdateSubAdmin(address indexed subAdmin, bool value);
-    event ManagerAdded(address indexed manager);
-    event ManagerRemoved(address indexed manager);
     event InvestorWhitelisted(address indexed investor);
     event InvestorRemovedFromWhitelist(address indexed investor);
+    event AdminUpdated(address indexed admin);
+    event UpdateEligibilityPeriod(uint256 indexed blocks);
 
     modifier onlySubAdminOrOwner() {
-        require(subAdmin[msg.sender] || msg.sender == owner(), "Only owner and sub admin can call this function");
+        require(subAdmin[msg.sender] || msg.sender == admin || msg.sender == owner(), "Only owner, admin and sub admin can call this function");
         _;
     }
 
@@ -50,6 +51,7 @@ contract Access is Ownable {
         uint256 _eligibilityPeriod,
         address _admin
     ) Ownable(msg.sender) {
+        require(_admin != address(0), "Admin cannot be zero address");
         swapRatio = _ratio;
         networkFeeWallet = _networkFeeWallet;
         minimumLiquidityPercentage = _minimumLiquidityPercentage;
@@ -65,6 +67,7 @@ contract Access is Ownable {
     }
 
     function setDenominator(uint256 value) external onlySubAdminOrOwner {
+        require(denominator > 0, "Denominator cannot be zero");
         denominator = value;
         emit DenominatorFeesUpdate(value);
     }
@@ -76,6 +79,7 @@ contract Access is Ownable {
 
     function updateEligibilityPeriod(uint256 blocks) external onlyAdminOrOwner {
         eligibilityPeriod = blocks;
+        emit UpdateEligibilityPeriod(blocks);
     }
 
     function updateMinimumLiquidityPercentage(uint8 newPercentage) external onlyAdminOrOwner {
@@ -94,22 +98,26 @@ contract Access is Ownable {
         emit WhitelistEnabled(enabled);
     }
 
-    function updateSubAdmin(address _subAdmin, bool _value) external onlyOwner {
+    function updateSubAdmin(address _subAdmin, bool _value) external onlyAdminOrOwner {
+        require(_subAdmin != address(0), "sub admin cannot be zero address");
         subAdmin[_subAdmin] = _value;
         emit UpdateSubAdmin(_subAdmin, _value);
     }
 
     function updateSignManager(address _signManagerAddress, bool _value) external onlySubAdminOrOwner {
+        require(_signManagerAddress != address(0), "sign manager address cannot be zero address");
         signManagers[_signManagerAddress] = _value;
         emit UpdateSigner(_signManagerAddress, _value);
     }
 
     function addInvestorToWhitelist(address investor) external onlyAdminOrOwner {
+        require(investor != address(0), "Investor cannot be zero address");
         whitelist[investor] = true;
         emit InvestorWhitelisted(investor);
     }
 
     function removeInvestorFromWhitelist(address investor) external onlyAdminOrOwner {
+        require(investor != address(0), "Investor cannot be zero address");
         whitelist[investor] = false;
         emit InvestorRemovedFromWhitelist(investor);
     }
@@ -129,4 +137,12 @@ contract Access is Ownable {
         _message = MessageHashUtils.toEthSignedMessageHash(_message);
         return ECDSA.recover(_message, signature);
     }
+
+    function updateAdmin(address newAdmin) external onlyOwner() {
+        admin = newAdmin;
+        emit AdminUpdated(newAdmin);
+    }
+
+
+
 }

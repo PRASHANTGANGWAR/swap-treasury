@@ -17,7 +17,7 @@ interface IERC20Extended is IERC20 {
 contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     using SafeERC20 for IERC20Extended;
 
-  
+    uint256[50] private __gap;
     uint256 public totalLiquidityUSDT;
     uint256 public totalFeesCollectedUSDT;
 
@@ -53,7 +53,7 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     using EnumerableMap for EnumerableMap.UintToAddressMap;
     EnumerableMap.UintToAddressMap private investorsList;
 
-    mapping(address => Investor) investors;
+    mapping(address => Investor) public investors;
     mapping(address => uint256) public investorBalancesUSDT;
     mapping(address => uint256) public nonces; // unique count for address
 
@@ -75,9 +75,11 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     );
 
     event LiquidityAdded(address indexed investor, uint256 amount, address token);
-    event LiquidityWithdrawn(address indexed investor, uint256 fullAmount, address token, uint256 baseInvestment, uint256 fee);
+    event LiquidityWithdrawn(address indexed investor, uint256 fullAmount, address token, uint256 requestedAmount, uint256 baseInvestment, uint256 fee);
     event PoolRebalanced(uint256 amount, address token);
     event SwapExecuted(address indexed client, address tokenIn, address tokenOut, uint256 amountIn, uint256 amountOut, address indexed receiver, uint256 fee);
+    event InvestorProfitsUpdated(address indexed investor, uint256 liquidityCounter, uint256 investorBalance);
+    event InvestorProfitUpdated(address indexed investor, uint256 feeShare, uint256 blockNumber);
 
 
     modifier onlySigner() {
@@ -85,7 +87,7 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         _;
     }
 
-   modifier onlyAdminOrOwner()  {
+    modifier onlyAdminOrOwner()  {
         require(msg.sender == accessContract.admin() || msg.sender == owner(), "Not authorized");
         _;
     }
@@ -141,13 +143,14 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         }
 
         updateAllInvestorProfits();
-        updateInvestorInvestments(_msgSender(), amount);
-        totalLiquidityUSDT -= amount;
+        uint256 eligibleAmount = updateInvestorInvestments(_msgSender(), amount);
+        totalLiquidityUSDT -= eligibleAmount;
         uint256 profit = getCurrentInvestorProfits(_msgSender());
-        uint256 totalAmountToWithdraw = amount + profit;
+        uint256 totalAmountToWithdraw = eligibleAmount + profit;
+        require(totalAmountToWithdraw > 0, "No liquiidity to withdraw");
         contractData.usdtContract.safeTransfer(msg.sender, totalAmountToWithdraw);
         withdrawFees();
-        emit LiquidityWithdrawn(msg.sender, totalAmountToWithdraw, token, amount, profit);
+        emit LiquidityWithdrawn(msg.sender, totalAmountToWithdraw, token, amount, eligibleAmount, profit);
     }
 
     function getCurrentInvestorProfits(address investor) public view returns (uint256) {
@@ -164,6 +167,7 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         for (uint256 i = 0; i < investorsList.length(); i++) {
             (, address investor) = investorsList.at(i);
             updateInvestorProfits(investor, liquidityCounter);
+            emit InvestorProfitsUpdated(investor, liquidityCounter, investorBalancesUSDT[investor]);
             liquidityCounter -= investorBalancesUSDT[investor];
         }
     }
@@ -174,10 +178,12 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
 
     function updateInvestorProfits(address investor, uint256 liquidityCounter) private {
         uint256 eligibleInvestmentAmount = getInvestmentAmount(investor);
-        uint256 feeShare = (eligibleInvestmentAmount * totalFeesCollectedUSDT) / liquidityCounter;
-        totalFeesCollectedUSDT -= feeShare;
-
-        investors[investor].feeProfits.push(FeeProfit(feeShare, block.number));
+        if(totalFeesCollectedUSDT > 0 && eligibleInvestmentAmount > 0 && liquidityCounter > 0){
+            uint256 feeShare = calculateFeeProfit(eligibleInvestmentAmount, liquidityCounter);
+            totalFeesCollectedUSDT -= feeShare;
+            investors[investor].feeProfits.push(FeeProfit(feeShare, block.number));
+            emit InvestorProfitUpdated(investor, feeShare, block.number);
+        }
     }
 
     function getInvestmentAmount(address investor) public view returns (uint256) {
@@ -189,21 +195,25 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     }
 
 
-    function updateInvestorInvestments(address investor, uint256 amount) private {
+    function updateInvestorInvestments(address investor, uint256 amount) public  returns(uint256){
         uint256 remainingAmount = amount;
+        uint256 eligibleBalance = 0;
         for (uint256 i = 0; i < investors[investor].investments.length; i++) {
             if (remainingAmount == 0) break;
             if (block.number - investors[investor].investments[i].blockNumber >= accessContract.eligibilityPeriod()) {
                 if (investors[investor].investments[i].amount <= remainingAmount) {
                     remainingAmount -= investors[investor].investments[i].amount;
+                    eligibleBalance += investors[investor].investments[i].amount;
                     investors[investor].investments[i].amount = 0;
                 } else {
                     investors[investor].investments[i].amount -= remainingAmount;
+                    eligibleBalance += remainingAmount;
                     remainingAmount = 0;
                 }
             }
         }
-        investorBalancesUSDT[msg.sender] -= amount;
+        investorBalancesUSDT[msg.sender] -= eligibleBalance;
+        return eligibleBalance;
     }
 
     function withdrawFees() internal {
@@ -214,10 +224,10 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
 
     function rebalancePool(uint256 amount) external onlyAdminOrOwner {
         require(amount > 0, "Amount must be greater than zero");
-        contractData.usdtContract.safeTransferFrom(msg.sender, address(this), amount);
 
         uint256 contractBalance = contractData.usdtContract.balanceOf(address(this));
-        require(contractBalance >= totalLiquidityUSDT, "Contract balance exceeds total liquidity");
+        require(contractBalance <= totalLiquidityUSDT, "Contract balance exceeds total liquidity");
+        contractData.usdtContract.safeTransferFrom(msg.sender, address(this), amount);
 
         uint256 excessLiquidity = amount > totalLiquidityUSDT - contractBalance ? amount - (totalLiquidityUSDT - contractBalance) : 0;
 
@@ -229,10 +239,6 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
 
         emit PoolRebalanced(amount, address(contractData.usdtContract));
     }
-
-
-
-    // Swap-related methods from the first contract
 
     function withdrawToAnother(
         address _to,
@@ -288,7 +294,6 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         uint _nonce
     ) public onlySigner {
         require(_nonce == nonces[_walletAddress], "Invalid nonce");
-        nonces[_walletAddress]++;
 
         validateAllowanceAndBalance(_conversionType, _walletAddress, _amount);
     
@@ -325,6 +330,7 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
                 _networkFee
             );
         }
+        nonces[_walletAddress]++;
     }
 
     function _swap(
@@ -370,7 +376,7 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
                 (10 ** contractData.usdtContract.decimals())) /
                 (10 ** contractData.ntzcContract.decimals());
             require(
-                contractData.ntzcContract.balanceOf(address(this)) >=
+                contractData.usdtContract.balanceOf(address(this)) >=
                     usdtAmount,
                 "Insufficient balance for swap"
             );
@@ -456,4 +462,29 @@ contract SwapTreasury is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         return  accessContract.denominator();
     }
 
+    function calculateFeeProfit(uint256 eligibleInvestmentAmount, uint256 liquidityCounter) public view  returns (uint256 result) {
+        result = (eligibleInvestmentAmount * totalFeesCollectedUSDT) / liquidityCounter;
+    }
+    function getInvestorDetails(address _investor) 
+            public 
+            view 
+            returns (Investment[] memory, FeeProfit[] memory) 
+        {
+            Investor storage investor = investors[_investor];
+            return (investor.investments, investor.feeProfits);
+        }
+
+    function blockNumber() public  view returns(uint256){
+        return  block.number;
+    }
+
+    function getEligibleBalance(address investor) public view returns (uint256) {
+        uint256 eligibleBalance = 0;
+        for (uint256 i = 0; i < investors[investor].investments.length; i++) {
+            if (block.number - investors[investor].investments[i].blockNumber >= accessContract.eligibilityPeriod()) {
+                eligibleBalance += investors[investor].investments[i].amount;
+            }
+        }
+        return eligibleBalance;
+    }
 }
