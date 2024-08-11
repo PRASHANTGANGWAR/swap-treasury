@@ -215,14 +215,15 @@ contract Access is Ownable, InvestorStructures {
         address _walletAddress,
         uint256 _amount,
         IERC20Extended _ntzcContract,
-        IERC20Extended _usdtContract
+        IERC20Extended _usdtContract,
+        address _adddress
     ) public  view {
         IERC20Extended tokenContract = _conversionType == ConversionType.ntzc
             ? _usdtContract
             : _ntzcContract;
 
         require(
-            tokenContract.allowance(_walletAddress, address(this)) >= _amount &&
+            tokenContract.allowance(_walletAddress, _adddress) >= _amount &&
                 tokenContract.balanceOf(_walletAddress) >= _amount,
             ErrorMessages.E17
         );

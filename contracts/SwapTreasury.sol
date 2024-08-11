@@ -295,7 +295,7 @@ contract SwapTreasury is
         ConversionType _conversionType,
         address _tokenReceiveAddress
     ) public {
-        accessContract.validateAllowanceAndBalance(_conversionType, msg.sender, _amount,  contractData.ntzcContract, contractData.usdtContract);
+        accessContract.validateAllowanceAndBalance(_conversionType, msg.sender, _amount,  contractData.ntzcContract, contractData.usdtContract, address(this));
         uint256 fees = accessContract.feesCalculate(_amount);
 
         uint256 feesInUSDT = accessContract.convertFeesToUsdt(
@@ -329,7 +329,7 @@ contract SwapTreasury is
     ) public onlySigner {
         require(_nonce == nonces[_walletAddress], ErrorMessages.E13);
 
-        accessContract.validateAllowanceAndBalance(_conversionType, _walletAddress, _amount,   contractData.ntzcContract, contractData.usdtContract);
+        accessContract.validateAllowanceAndBalance(_conversionType, _walletAddress, _amount,   contractData.ntzcContract, contractData.usdtContract, address(this));
 
         bytes32 message = keccak256(
             abi.encode(
@@ -486,15 +486,12 @@ contract SwapTreasury is
     ) public onlyAdminOrOwner {
         _withdraw(_to, _conversionType, _amount);
     }
-
   
-    function numerator() public view returns (uint256) {
-        return accessContract.numerator();
-    }
-
-    function denominator() public view returns (uint256) {
-        return accessContract.denominator();
-    }
+   function getNumeratorAndDenominator() public view returns (uint256 numerator, uint256 denominator) {
+    numerator = accessContract.numerator();
+    denominator = accessContract.denominator();
+    return (numerator, denominator);
+   }
 
     function getEligibleBalance(address investor)
         public

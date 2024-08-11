@@ -116,6 +116,7 @@ interface IAccess {
         address _walletAddress,
         uint256 _amount,
         IERC20Extended _ntzcContract,
-        IERC20Extended _usdtContract
+        IERC20Extended _usdtContract,
+        address _adddress
     ) external view;
 }
