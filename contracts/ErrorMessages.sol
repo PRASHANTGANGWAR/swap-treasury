@@ -10,8 +10,8 @@ library ErrorMessages {
     string internal constant E6 = "Only USDT withdrawals are allowed";
     string internal constant E7 =
         "Cannot withdraw more than the balance or amount is zero";
-    string internal constant E8 = "Contract is out of balance, try later";
-    string internal constant E9 = "No liquiidity to withdraw";
+    string internal constant E8 =  "Contract is out of balance, try later";
+    string internal constant E9 =  "Withdrawal on hold, please wait.";
     string internal constant E10 = "Amount must be greater than zero";
     string internal constant E11 = "Contract balance exceeds total liquidity";
     string internal constant E12 = "Invalid address";
@@ -22,9 +22,9 @@ library ErrorMessages {
     string internal constant E17 = "Insufficient allowance or balance";
     string internal constant E18 = "Only owner, admin and sub admin can call this function";
     string internal constant E19 = "Admin cannot be zero address";
-    string internal constant E20 =  "Denominator cannot be zero";
+    string internal constant E20 = "Denominator cannot be zero";
     string internal constant E21 = "Same wallet address";
     string internal constant E22 = "sub admin cannot be zero address";
     string internal constant E23 = "sign manager address cannot be zero address";
-    string internal constant E24 =  "Investor cannot be zero address";
+    string internal constant E24 = "Investor cannot be zero address";
 }
